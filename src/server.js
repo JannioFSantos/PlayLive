@@ -29,10 +29,20 @@ import {
 } from './security.js';
 import { attachRealtime } from './realtime.js';
 import {
+  clearLiveChat,
+  liveChatStatus,
+  readLiveChat,
+  resetLiveChat,
+  sendLiveChatMessage,
+  setLiveChatEnabled,
+} from './live-chat.js';
+import {
   adminLive,
   configureLive,
   joinLobby,
   kickViewer,
+  liveChatIdentity,
+  liveSettings,
   leaveLobby,
   pickViewer,
   publicLive,
@@ -40,6 +50,9 @@ import {
 } from './live.js';
 
 const app = createApp({ trustProxy: config.trustProxy });
+
+const initialLive = liveSettings();
+resetLiveChat(Boolean(initialLive.enabled && initialLive.videoId));
 
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -94,7 +107,7 @@ app.get('/api/status', (_req, res) => {
   res.json(publicStatus());
 });
 
-/* Sala de espectadores da live do YouTube */
+/* Sala e chat dos espectadores da live */
 app.get('/api/live', (_req, res) => {
   res.json(publicLive());
 });
@@ -112,6 +125,22 @@ app.get('/api/live/me', (req, res) => {
 app.post('/api/live/leave', (req, res) => {
   leaveLobby(req.body?.viewerId);
   res.json({ ok: true });
+});
+
+app.post('/api/live/chat/read', (req, res) => {
+  limit(req, 'live:chat:read', 6000, 60_000);
+  liveChatIdentity(req.body?.viewerId);
+  res.json({
+    ...readLiveChat(req.body?.after, req.body?.revision),
+    chatEnabled: liveChatStatus().enabled,
+  });
+});
+
+app.post('/api/live/chat/send', (req, res) => {
+  limit(req, 'live:chat:send', 12_000, 60_000);
+  const viewerId = String(req.body?.viewerId ?? '');
+  const nick = liveChatIdentity(viewerId);
+  res.status(201).json(sendLiveChatMessage(viewerId, nick, req.body?.text));
 });
 
 /* ------------------------------------------------------------------ */
@@ -230,6 +259,18 @@ app.post('/api/admin/action', asyncH(async (req, res) => {
     case 'live_set': {
       const settings = configureLive({ url: payload.url, enabled: payload.enabled });
       return res.json({ ok: true, live: settings });
+    }
+
+    case 'live_chat_toggle': {
+      const live = liveSettings();
+      if (!live.enabled || !live.videoId) throw conflict('A live não está aberta.', 'live_disabled');
+      return res.json({ ok: true, chat: setLiveChatEnabled(payload.enabled) });
+    }
+
+    case 'live_chat_clear': {
+      const live = liveSettings();
+      if (!live.enabled || !live.videoId) throw conflict('A live não está aberta.', 'live_disabled');
+      return res.json({ ok: true, chat: clearLiveChat() });
     }
 
     case 'live_pick': {

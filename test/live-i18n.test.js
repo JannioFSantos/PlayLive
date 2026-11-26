@@ -12,3 +12,12 @@ test('traduz textos dinâmicos e preserva o nome do jogador', () => {
   assert.equal(translate('en', 'turnTitle', { nick: 'Ana' }), "🎮 It's your turn, Ana!");
   assert.equal(translate('es', 'roomCount', { count: '3' }), '3 en la sala');
 });
+
+test('traduz o chat próprio nos três idiomas', () => {
+  assert.equal(translate('pt', 'chatTitle'), 'Chat da live');
+  assert.equal(translate('en', 'chatTitle'), 'Live chat');
+  assert.equal(translate('es', 'chatTitle'), 'Chat en vivo');
+  assert.equal(translate('pt', 'chatJoin'), 'Entre na fila para participar do chat.');
+  assert.equal(translate('en', 'chatJoin'), 'Join the queue to read and send messages.');
+  assert.equal(translate('es', 'chatJoin'), 'Únete a la cola para leer y enviar mensajes.');
+});

@@ -81,13 +81,14 @@ test('live: sala por apelido, dono escolhe, escolhido ganha acesso sem pagar', a
   assert.equal(home.headers.get('referrer-policy'), 'no-referrer');
   const homeHtml = await home.text();
   assert.match(homeHtml, /<iframe id="player" referrerpolicy="origin"/);
-  assert.match(homeHtml, /<iframe class="chat-frame" id="chat" referrerpolicy="origin"/);
+  assert.match(homeHtml, /id="chatPanel"/);
+  assert.match(homeHtml, /id="chatMessages"/);
+  assert.match(homeHtml, /id="chatForm"/);
+  assert.doesNotMatch(homeHtml, /youtube\.com\/live_chat|youtubeChatLink|chatMobile/);
   assert.match(homeHtml, /id="playingCard"/);
   assert.match(homeHtml, /id="playingName"/);
   assert.match(homeHtml, /id="playingTime"/);
   assert.match(homeHtml, /id="queueList"/);
-  assert.match(homeHtml, /id="chatMobile"/);
-  assert.match(homeHtml, /id="youtubeChatLink" target="_blank" rel="noopener"/);
 
   const login = await call('/api/admin/login', { method: 'POST', body: { password: PASSWORD } });
   const cookie = login.headers.get('set-cookie').split(';')[0];
@@ -96,8 +97,14 @@ test('live: sala por apelido, dono escolhe, escolhido ganha acesso sem pagar', a
   });
 
   // Sala fechada: ninguém entra
-  assert.equal((await call('/api/live')).data.enabled, false);
+  const closedLive = (await call('/api/live')).data;
+  assert.equal(closedLive.enabled, false);
+  assert.equal(closedLive.chatEnabled, false);
   assert.equal((await call('/api/live/join', { method: 'POST', body: { nick: 'Ana' } })).status, 409);
+  assert.equal((await call('/api/live/chat/read', {
+    method: 'POST',
+    body: { viewerId: 'alguem' },
+  })).status, 409);
 
   // Link inválido é recusado; válido abre a sala
   assert.equal((await admin('live_set', { url: 'https://evil.com/x', enabled: true })).status, 400);
@@ -105,6 +112,7 @@ test('live: sala por apelido, dono escolhe, escolhido ganha acesso sem pagar', a
   assert.equal(set.status, 200);
   let publicLive = (await call('/api/live')).data;
   assert.equal(publicLive.videoId, 'dQw4w9WgXcQ');
+  assert.equal(publicLive.chatEnabled, true);
   assert.deepEqual(publicLive.queue, []);
   assert.equal(publicLive.playing, null);
 
@@ -119,6 +127,42 @@ test('live: sala por apelido, dono escolhe, escolhido ganha acesso sem pagar', a
   assert.equal(publicLive.viewers, 2);
   assert.equal(publicLive.playing, null);
   assert.ok(!JSON.stringify(publicLive).includes(ana.viewerId));
+  assert.equal((await call('/api/live/chat/read', {
+    method: 'POST',
+    body: { viewerId: 'nao-entrou-na-fila' },
+  })).status, 403);
+  assert.equal((await call('/api/live/chat/send', {
+    method: 'POST',
+    body: { viewerId: 'nao-entrou-na-fila', text: 'oi' },
+  })).status, 403);
+
+  const firstChatRead = await call('/api/live/chat/read', {
+    method: 'POST',
+    body: { viewerId: ana.viewerId },
+  });
+  assert.equal(firstChatRead.status, 200);
+  assert.deepEqual(firstChatRead.data.messages, []);
+  const sentMessage = await call('/api/live/chat/send', {
+    method: 'POST',
+    body: { viewerId: ana.viewerId, text: '<script>oi</script>' },
+  });
+  assert.equal(sentMessage.status, 201);
+  assert.equal(sentMessage.data.nick, 'Ana');
+  assert.equal(sentMessage.data.text, '<script>oi</script>');
+  assert.deepEqual(Object.keys(sentMessage.data).sort(), ['at', 'id', 'nick', 'text']);
+  const chatForBia = await call('/api/live/chat/read', {
+    method: 'POST',
+    body: { viewerId: bia.viewerId },
+  });
+  assert.deepEqual(chatForBia.data.messages, [sentMessage.data]);
+  assert.equal((await call('/api/live/chat/send', {
+    method: 'POST',
+    body: { viewerId: ana.viewerId, text: 'mensagem rápida' },
+  })).status, 429);
+  assert.equal((await call('/api/live/chat/send', {
+    method: 'POST',
+    body: { viewerId: bia.viewerId, text: 'x'.repeat(501) },
+  })).status, 400);
 
   // O painel vê os dois, sem expor o segredo de cada um
   let overview = (await call('/api/admin/overview', { cookie })).data;
@@ -193,6 +237,29 @@ test('live: sala por apelido, dono escolhe, escolhido ganha acesso sem pagar', a
   assert.ok(publicLive.playing.remainingMs > 6.9 * 60_000);
   assert.ok(!JSON.stringify(publicLive).includes(token));
 
+  assert.equal((await admin('live_chat_toggle', { enabled: false })).status, 200);
+  publicLive = (await call('/api/live')).data;
+  assert.equal(publicLive.chatEnabled, false);
+  const mutedChat = await call('/api/live/chat/read', {
+    method: 'POST',
+    body: { viewerId: bia.viewerId, after: 0, revision: chatForBia.data.revision },
+  });
+  assert.equal(mutedChat.data.chatEnabled, false);
+  assert.deepEqual(mutedChat.data.messages, [sentMessage.data]);
+  assert.equal((await call('/api/live/chat/send', {
+    method: 'POST',
+    body: { viewerId: bia.viewerId, text: 'chat pausado' },
+  })).status, 409);
+
+  assert.equal((await admin('live_chat_clear')).data.chat.messageCount, 0);
+  const clearedChat = await call('/api/live/chat/read', {
+    method: 'POST',
+    body: { viewerId: bia.viewerId, after: 1, revision: chatForBia.data.revision },
+  });
+  assert.equal(clearedChat.data.reset, true);
+  assert.deepEqual(clearedChat.data.messages, []);
+  assert.equal((await admin('live_chat_toggle', { enabled: true })).status, 200);
+
   // O dono pode somar minutos
   assert.equal((await admin('extend', { minutes: 5 })).status, 200);
   session = (await call(`/api/session?s=${encodeURIComponent(token)}`)).data;
@@ -210,7 +277,25 @@ test('live: sala por apelido, dono escolhe, escolhido ganha acesso sem pagar', a
   // Quem sai da sala não aparece mais; fechar a sala limpa tudo
   await call('/api/live/leave', { method: 'POST', body: { viewerId: bia.viewerId } });
   assert.equal((await call('/api/live')).data.viewers, 1);
+  assert.equal((await call('/api/live/chat/read', {
+    method: 'POST',
+    body: { viewerId: bia.viewerId },
+  })).status, 403);
   await admin('live_set', { url: '', enabled: false });
-  assert.equal((await call('/api/live')).data.enabled, false);
+  publicLive = (await call('/api/live')).data;
+  assert.equal(publicLive.enabled, false);
+  assert.equal(publicLive.chatEnabled, false);
   assert.equal((await call(`/api/live/me?v=${ana.viewerId}`)).data.joined, false);
+  assert.equal((await call('/api/live/chat/read', {
+    method: 'POST',
+    body: { viewerId: ana.viewerId },
+  })).status, 409);
+
+  await admin('live_set', { url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ', enabled: true });
+  const caio = (await call('/api/live/join', { method: 'POST', body: { nick: 'Caio' } })).data;
+  const freshChat = await call('/api/live/chat/read', {
+    method: 'POST',
+    body: { viewerId: caio.viewerId },
+  });
+  assert.deepEqual(freshChat.data.messages, []);
 });

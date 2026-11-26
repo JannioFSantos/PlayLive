@@ -8,24 +8,24 @@ Você escolhe quem joga; a pessoa escolhida recebe o botão **Jogar agora** na p
 ## Como funciona
 
 ```
-                     ┌──────────── YouTube (live + chat embutidos) ────────────┐
-                     │                                                         │
-Espectadores ──> página inicial (/) ──┐                                        │
-  (apelido)                            ▼                                        │
-                                  Servidor Play Live  <── você, no /admin: escolhe quem joga
-                                       │  (sinalização WebRTC, relógio, sessão)
-              ┌────────────────────────┴───────────────┐
-              ▼                                        ▼
-        Jogador (/play)  <── vídeo WebRTC (P2P) ──  PC do jogo (/host)
-        controle no navegador ── WebSocket ──>  ponte de controle ──> controle virtual
+YouTube live --vídeo--> página inicial (/) <--apelido-- Espectadores
+                             │ fila + chat
+                             ▼
+                    Servidor Play Live <── você, no /admin
+                          │                   escolhe quem joga
+                          │ (sinalização WebRTC, relógio, sessão)
+              ┌───────────┴───────────┐
+              ▼                       ▼
+        Jogador (/play) <── vídeo WebRTC (P2P) ── PC do jogo (/host)
+        controle no navegador ── WebSocket ──> ponte ──> controle virtual
 ```
 
-- **Página inicial (`/`)**: mostra o player e o chat do YouTube e uma sala onde o espectador entra com um apelido.
+- **Página inicial (`/`)**: mostra a live, a fila e o chat próprio. Só quem entrou na fila pode ler e enviar mensagens; o apelido da fila identifica a pessoa.
 - **Painel (`/admin`)**: você cola o link da live, abre a sala, define os minutos e clica em **escolher**.
 - **Jogador (`/play`)**: recebe o vídeo do jogo em tempo real e envia comandos por controle físico (Gamepad API) ou pelos controles de toque em celulares e tablets.
 - **Host (`/host`)**: roda no PC do jogo; captura a placa de captura (Xbox) ou uma janela (jogo de PC) e transmite por WebRTC.
 - **Ponte de controle** (`tools/gamepad-bridge`): no Windows, transforma os comandos do jogador em um controle Xbox 360 virtual, para jogos de PC.
-- O vídeo vai **direto** do host para o jogador (P2P); o servidor só faz a sinalização.
+- O vídeo vai **direto** do host para o jogador (P2P); o servidor cuida da sinalização e mantém a fila e o chat temporário.
 
 ## Requisitos
 
@@ -36,7 +36,7 @@ Espectadores ──> página inicial (/) ──┐                              
 | Jogar jogos de PC | Windows 10/11, Python 3 e o driver **ViGEmBus** (para a ponte de controle). |
 | Jogar Xbox físico | Placa de captura HDMI reconhecida como câmera (UVC) **e** uma forma de controlar o console (veja [Limites](#limites-e-avisos)). |
 | Quem joga | Chrome/Edge no PC ou navegador moderno no celular/tablet; controle USB/Bluetooth ou controles de toque na tela. |
-| Sua live | Uma live no YouTube **com chat ativado** e, de preferência, incorporação permitida. |
+| Sua live | Uma live no YouTube e, de preferência, incorporação permitida. O chat do YouTube não é necessário. |
 
 ## Início rápido (teste local)
 
@@ -178,8 +178,8 @@ Sem Docker: `node --env-file-if-exists=.env src/server.js` atrás de um proxy co
 - **Xbox físico:** a ponte cobre jogos **no PC** (controle virtual via ViGEmBus). O console não aceita controle virtual: é preciso um adaptador de hardware ou transmitir o jogo para o PC (app do Xbox) e jogar por lá.
 - **Atraso:** a live no YouTube tem atraso de segundos; **quem joga vê o vídeo pelo `/play` (WebRTC)**, não pela live. Espere cerca de 80 a 150 ms de ponta a ponta.
 - **Escala:** a sala (apelidos) fica na memória do servidor; ao reiniciar, os espectadores precisam entrar de novo (quem está jogando continua). Limite de 200 pessoas na sala.
-- **Chat e player do YouTube** só carregam com a live ao vivo/programada, chat ativado e incorporação permitida.
-- **Celular/tablet:** o YouTube não permite incorporar o chat ao vivo na web móvel; a página oferece um botão para abrir a live e comentar no YouTube em outra aba.
+- **Chat próprio:** funciona enquanto a sala da live estiver aberta; só participantes da fila podem ler ou enviar mensagens. As últimas 100 mensagens ficam temporariamente na memória e são apagadas ao fechar/trocar a live ou reiniciar o servidor. No `/admin`, o host pode pausar o envio ou limpar o chat.
+- **Celular/tablet:** o chat próprio funciona na página, sem redirecionar para o YouTube.
 - **Direitos e termos:** dar acesso ao jogo a espectadores pode ferir os termos das plataformas e das desenvolvedoras. Confira antes de usar.
 - **Testado:** servidor, sala, escolha, sessão, relógio, ponte (com sink simulado) e arquivos compose (sintaxe). **Não testado:** Windows com ViGEmBus, imagem Docker construída, Coolify, YouTube real e placa de captura real.
 
@@ -191,7 +191,8 @@ Sem Docker: `node --env-file-if-exists=.env src/server.js` atrás de um proxy co
 | Jogador fica em "preparando" e a sessão cancela | Clique em **Iniciar captura** no `/host` (captura de janela exige clique); aumente `PROVISION_TIMEOUT_SEC`. |
 | Sem vídeo para o jogador | Configure TURN (`TURN_URL`, usuário, senha); confira portas do TURN. |
 | Jogo não reconhece o controle | Inicie a ponte **antes** do jogo; confira o ViGEmBus; teste com `npm run bridge:dry`. |
-| O chat do YouTube não aparece | A live precisa estar no ar com chat ativado e incorporação permitida. |
+| Não consigo participar do chat | Entre na fila da página inicial; se o chat estiver pausado, peça ao host para reabri-lo no `/admin`. |
+| O player do YouTube não aparece | Confira se a live está aberta e se a incorporação está permitida. |
 | `/host` não lista a placa | A placa precisa ser UVC; outro programa (OBS) pode estar usando-a. |
 
 ## Testes
@@ -200,7 +201,7 @@ Sem Docker: `node --env-file-if-exists=.env src/server.js` atrás de um proxy co
 npm test
 ```
 
-Cobrem: sala e escolha de jogadores, trava de PC offline, relógio e avisos, cancelamento por falta de imagem, e a ponte de controle ponta a ponta com um controle simulado.
+Cobrem: sala e escolha de jogadores, chat restrito à fila e moderação, trava de PC offline, relógio e avisos, cancelamento por falta de imagem, e a ponte de controle ponta a ponta com um controle simulado.
 
 ## Estrutura
 

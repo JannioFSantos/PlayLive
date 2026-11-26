@@ -288,6 +288,11 @@ function renderLive() {
   $('liveBadge').textContent = live.enabled ? 'sala aberta' : 'desligada';
   $('liveBadge').className = `badge ${live.enabled ? 'green' : ''}`;
   $('liveCount').textContent = `${live.viewers.length} na sala`;
+  const chat = live.chat ?? { enabled: false, messageCount: 0 };
+  $('liveChatStatus').textContent = `Chat ${chat.enabled ? 'ativo' : 'pausado'} · ${chat.messageCount} mensagens`;
+  $('liveChatToggle').textContent = chat.enabled ? 'pausar chat' : 'abrir chat';
+  $('liveChatToggle').disabled = !live.enabled;
+  $('liveChatClear').disabled = !live.enabled || chat.messageCount === 0;
   if (!$('liveMinutes').dataset.init && overview.config) {
     $('liveMinutes').value = overview.config.defaultMinutes;
     $('liveMinutes').max = overview.config.maxMinutes;
@@ -333,6 +338,13 @@ document.addEventListener('click', async (event) => {
       toast(`${result.nick} vai jogar por ${result.minutes} min.`, 'green');
     } else if (kind === 'kick') {
       await api('/api/admin/action', { method: 'POST', body: { action: 'live_kick', pub: btn.dataset.pub } });
+    } else if (kind === 'chat-toggle') {
+      await api('/api/admin/action', {
+        method: 'POST',
+        body: { action: 'live_chat_toggle', enabled: !overview.live.chat.enabled },
+      });
+    } else if (kind === 'chat-clear') {
+      await api('/api/admin/action', { method: 'POST', body: { action: 'live_chat_clear' } });
     }
     await load(true);
   } catch (err) {

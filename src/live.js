@@ -1,11 +1,12 @@
 import crypto from 'node:crypto';
 import { store, pushEvent } from './state.js';
 import { bus } from './bus.js';
-import { bad, conflict, notFound } from './errors.js';
+import { ApiError, bad, conflict, notFound } from './errors.js';
 import { now } from './util.js';
 import { config } from './config.js';
 import { assertOnline } from './availability.js';
 import { ACTIVE_STATUSES, remainingMs, slotStatus, startGuestSession } from './sessions.js';
+import { liveChatStatus, resetLiveChat } from './live-chat.js';
 
 /**
  * Modo live: o espectador da live do YouTube entra numa sala com um apelido e
@@ -54,14 +55,21 @@ export function liveSettings(state = store.data) {
 
 export function configureLive({ url, enabled }) {
   const videoId = extractVideoId(url);
-  if (enabled && !videoId) {
+  const nextEnabled = Boolean(enabled);
+  const current = liveSettings();
+  if (nextEnabled && !videoId) {
     throw bad('Cole um link válido de live do YouTube.', 'invalid_live_url');
   }
   store.mutate((state) => {
-    state.live = { enabled: Boolean(enabled), videoId: videoId ?? state.live?.videoId ?? null };
+    state.live = { enabled: nextEnabled, videoId: videoId ?? state.live?.videoId ?? null };
     pushEvent(state, 'live.configured', { enabled: state.live.enabled, videoId: state.live.videoId });
   });
-  if (!enabled) lobby.clear();
+  if (!nextEnabled) {
+    lobby.clear();
+    resetLiveChat(false);
+  } else if (!current.enabled || current.videoId !== videoId) {
+    resetLiveChat(true);
+  }
   bus.emit('state:changed');
   return liveSettings();
 }
@@ -93,6 +101,7 @@ export function publicLive(t = now()) {
   const playing = timeLeft > 0
     ? { name: session.customer.name, remainingMs: timeLeft }
     : null;
+  const chat = liveChatStatus();
 
   return {
     enabled: Boolean(enabled && videoId),
@@ -100,6 +109,7 @@ export function publicLive(t = now()) {
     viewers: lobby.size,
     queue,
     playing,
+    chatEnabled: Boolean(enabled && videoId && chat.enabled),
   };
 }
 
@@ -124,6 +134,25 @@ export function joinLobby(nickInput) {
 
 export function leaveLobby(viewerId) {
   if (lobby.delete(String(viewerId ?? ''))) bus.emit('state:changed');
+}
+
+export function liveChatIdentity(viewerId) {
+  const { enabled, videoId } = liveSettings();
+  if (!enabled || !videoId) {
+    throw conflict('O chat está disponível apenas durante a live.', 'live_disabled');
+  }
+  const key = String(viewerId ?? '');
+  prune();
+  const viewer = lobby.get(key);
+  if (viewer) {
+    viewer.seenAt = now();
+    return viewer.nick;
+  }
+  const session = store.data.session;
+  if (session?.guestViewerId === key && ACTIVE_STATUSES.includes(session.status)) {
+    return session.customer.name;
+  }
+  throw new ApiError(403, 'not_in_queue', 'Entre na fila para acessar o chat.');
 }
 
 /** Heartbeat + resposta: "sou eu o escolhido?" */
@@ -162,6 +191,7 @@ export function adminLive(t = now()) {
   return {
     enabled: Boolean(settings.enabled),
     videoId: settings.videoId,
+    chat: liveChatStatus(),
     viewers: [...lobby.values()]
       .sort((a, b) => a.joinedAt - b.joinedAt)
       .map((v) => ({ pub: v.pub, nick: v.nick, joinedAt: v.joinedAt })),
