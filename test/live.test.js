@@ -82,6 +82,8 @@ test('live: sala por apelido, dono escolhe, escolhido ganha acesso sem pagar', a
   const homeHtml = await home.text();
   assert.match(homeHtml, /<iframe id="player" referrerpolicy="origin"/);
   assert.match(homeHtml, /<iframe class="chat-frame" id="chat" referrerpolicy="origin"/);
+  assert.match(homeHtml, /id="chatMobile"/);
+  assert.match(homeHtml, /id="youtubeChatLink" target="_blank" rel="noopener"/);
 
   const login = await call('/api/admin/login', { method: 'POST', body: { password: PASSWORD } });
   const cookie = login.headers.get('set-cookie').split(';')[0];

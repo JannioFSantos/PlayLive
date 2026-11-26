@@ -11,6 +11,8 @@
     .live-frame { position: relative; width: 100%; aspect-ratio: 16 / 9; background: #000; border-radius: 14px; overflow: hidden; }
     .live-frame iframe, .chat-frame { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
     .chat-box { position: relative; height: 560px; background: #0b0b12; border-radius: 14px; overflow: hidden; }
+    .chat-mobile-fallback { height: auto; min-height: 220px; padding: 24px; display: grid; place-items: center; text-align: center; }
+    .chat-mobile-fallback p { max-width: 420px; color: var(--muted); line-height: 1.6; }
     .turn { border: 1px solid rgba(74, 222, 128, 0.5); background: rgba(74, 222, 128, 0.1); }
     @media (max-width: 900px) {
       .live-grid { grid-template-columns: 1fr; }
@@ -50,7 +52,7 @@
           <div class="card-head"><h2>Quer jogar?</h2><span class="badge" id="roomBadge">—</span></div>
           <p class="muted tiny" style="margin-top: 0;">
             Entre na sala com um apelido. O dono escolhe quem joga; se for você, o botão de jogar aparece aqui,
-            sem precisar sair da live. Tenha um controle conectado ao aparelho (USB ou Bluetooth).
+            sem precisar sair da live. Use um controle conectado ou os comandos na tela pelo celular ou tablet.
           </p>
           <form id="joinForm" class="row">
             <input id="nick" type="text" maxlength="24" placeholder="Seu apelido" autocomplete="off" style="flex: 1; min-width: 160px;" />
@@ -64,7 +66,14 @@
           <p class="tiny" id="msg" style="margin-bottom: 0;"></p>
         </div>
       </div>
-      <div class="chat-box"><iframe class="chat-frame" id="chat" referrerpolicy="origin" title="Chat da live"></iframe></div>
+      <div class="chat-box" id="chatEmbed"><iframe class="chat-frame" id="chat" referrerpolicy="origin" title="Chat da live"></iframe></div>
+      <div class="chat-box chat-mobile-fallback hidden" id="chatMobile">
+        <div>
+          <h2>Chat no celular ou tablet</h2>
+          <p>O YouTube não permite incorporar o chat ao vivo na web móvel. Abra a live no YouTube para assistir e comentar.</p>
+          <a class="btn btn-primary" id="youtubeChatLink" target="_blank" rel="noopener">Abrir live e chat no YouTube</a>
+        </div>
+      </div>
     </div>
   </main>
 

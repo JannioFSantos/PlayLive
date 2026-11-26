@@ -7,6 +7,12 @@ let viewerId = null;
 let nick = null;
 let shownVideo = null;
 
+function isMobileWeb() {
+  return navigator.userAgentData?.mobile === true
+    || /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent)
+    || (navigator.maxTouchPoints > 0 && window.matchMedia?.('(pointer: coarse)').matches);
+}
+
 try {
   const saved = JSON.parse(localStorage.getItem(KEY) ?? 'null');
   if (saved?.viewerId) ({ viewerId, nick } = saved);
@@ -35,7 +41,16 @@ function mountVideo(videoId) {
   shownVideo = videoId;
   const id = encodeURIComponent(videoId);
   $('player').src = `https://www.youtube.com/embed/${id}?autoplay=1&playsinline=1&rel=0`;
-  $('chat').src = `https://www.youtube.com/live_chat?v=${id}&embed_domain=${encodeURIComponent(location.hostname)}`;
+  if (isMobileWeb()) {
+    $('chat').removeAttribute('src');
+    $('chatEmbed').classList.add('hidden');
+    $('youtubeChatLink').href = `https://www.youtube.com/watch?v=${id}`;
+    $('chatMobile').classList.remove('hidden');
+  } else {
+    $('chatMobile').classList.add('hidden');
+    $('chatEmbed').classList.remove('hidden');
+    $('chat').src = `https://www.youtube.com/live_chat?v=${id}&embed_domain=${encodeURIComponent(location.hostname)}`;
+  }
 }
 
 async function refresh() {
@@ -60,7 +75,7 @@ async function refresh() {
         $('turnBtn').href = me.playUrl;
         $('turnHint').textContent = me.sessionStatus === 'provisioning'
           ? 'Preparando a transmissão... o botão já funciona. O tempo começa quando a imagem aparecer.'
-          : 'Conecte seu controle e entre agora.';
+          : 'Entre agora; no celular ou tablet, os comandos aparecem na tela.';
         showRoom(true, me.nick);
       } else {
         $('turnCard').classList.add('hidden');

@@ -179,6 +179,7 @@ Sem Docker: `node --env-file-if-exists=.env src/server.js` atrás de um proxy co
 - **Atraso:** a live no YouTube tem atraso de segundos; **quem joga vê o vídeo pelo `/play` (WebRTC)**, não pela live. Espere cerca de 80 a 150 ms de ponta a ponta.
 - **Escala:** a sala (apelidos) fica na memória do servidor; ao reiniciar, os espectadores precisam entrar de novo (quem está jogando continua). Limite de 200 pessoas na sala.
 - **Chat e player do YouTube** só carregam com a live ao vivo/programada, chat ativado e incorporação permitida.
+- **Celular/tablet:** o YouTube não permite incorporar o chat ao vivo na web móvel; a página oferece um botão para abrir a live e comentar no YouTube em outra aba.
 - **Direitos e termos:** dar acesso ao jogo a espectadores pode ferir os termos das plataformas e das desenvolvedoras. Confira antes de usar.
 - **Testado:** servidor, sala, escolha, sessão, relógio, ponte (com sink simulado) e arquivos compose (sintaxe). **Não testado:** Windows com ViGEmBus, imagem Docker construída, Coolify, YouTube real e placa de captura real.
 
