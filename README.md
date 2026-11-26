@@ -88,6 +88,7 @@ Uma placa de captura só atende **um programa por vez**. Se o OBS (que transmite
 | `PORT` | `8080` | Porta HTTP. |
 | `BASE_URL` | `http://localhost:PORT` | URL pública (links de jogo). Em produção use `https://...`. |
 | `DATA_DIR` | `./data` | Estado, configuração da live e segredos. |
+| `DOMAIN` | — | Domínio público usado pelo Docker Compose com Caddy (sem `https://`). |
 | `HOST_KEY` | gerada | Chave do host e da ponte. Vazia = gerada e guardada em `data/host-key.txt`. |
 | `ADMIN_PASSWORD` | gerada | Senha do `/admin`. Vazia = gerada e guardada em `data/admin-password.txt`. |
 | `MAX_MINUTES` | `60` | Máximo de minutos por pessoa. |
@@ -100,8 +101,11 @@ Uma placa de captura só atende **um programa por vez**. Se o OBS (que transmite
 | `XBOX_POWER_ON_CMD`, `XBOX_POWER_OFF_CMD` | vazios | Comandos opcionais de ligar/desligar o Xbox (executados no servidor). |
 | `TRUST_PROXY` | `0` | `1` atrás de Caddy/Nginx/Cloudflare/Coolify. |
 | `DEBUG` | `0` | Log detalhado. |
+| `BRIDGE_URL` | `ws://localhost:PORT/ws` | URL WebSocket do servidor para a ponte de controle. |
+| `BRIDGE_PYTHON` | automático | Executável Python usado pela ponte (`python` no Windows, `python3` nos demais). |
+| `BRIDGE_DRY_RUN` | `0` | `1` testa a ponte sem criar um controle virtual. |
 
-Para a ponte (no PC do jogo): `BRIDGE_URL` (ex.: `wss://SEU-DOMINIO/ws`), `BRIDGE_PYTHON`, `BRIDGE_DRY_RUN`. Veja `.env.example`.
+Copie `.env.example` para `.env` e ajuste as opções necessárias. Para a ponte em um PC separado, use `BRIDGE_URL` (ex.: `wss://SEU-DOMINIO/ws`) e a mesma `HOST_KEY` do servidor. Não versione `.env` nem a pasta `data/`.
 
 ## Ponte de controle (Windows)
 
