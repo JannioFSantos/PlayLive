@@ -15,7 +15,7 @@ services:
     build: .
     restart: unless-stopped
     environment:
-      BASE_URL: ${BASE_URL:https://playlive.v6.rocks}
+      BASE_URL: ${BASE_URL:-https://playlive.v6.rocks}
       PORT: "8080"
       DATA_DIR: /data
       TRUST_PROXY: "1" # atrás do proxy do Coolify
