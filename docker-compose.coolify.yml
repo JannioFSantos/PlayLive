@@ -1,0 +1,47 @@
+# Play Live para o Coolify (Build Pack: "Docker Compose")
+#
+# No Coolify: Docker Compose Location = /docker-compose.coolify.yml
+#
+# - O domínio e o HTTPS são do próprio Coolify (proxy Traefik): não há Caddy aqui.
+# - Configure o domínio do serviço "app" (porta 8080) na aba do serviço no Coolify.
+# - BASE_URL precisa ser a URL pública com https (ex.: https://live.seudominio.com).
+#   Defina-a em "Environment Variables".
+# - Deixe em branco o que não usar: segredos vazios são gerados e guardados no volume.
+# - O estado (sessão, configuração da live, segredos) fica no volume /data. Não remova.
+# - O WebSocket (/ws) passa pelo proxy do Coolify sem configuração extra.
+
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    environment:
+      BASE_URL: ${BASE_URL:?defina BASE_URL com a URL publica https}
+      PORT: "8080"
+      DATA_DIR: /data
+      TRUST_PROXY: "1" # atrás do proxy do Coolify
+
+      # Segurança (vazio = gerado sozinho; veja em Logs)
+      HOST_KEY: ${HOST_KEY:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+
+      # Regras de uso
+      MAX_MINUTES: ${MAX_MINUTES:-60}
+      DEFAULT_MINUTES: ${DEFAULT_MINUTES:-10}
+      PROVISION_TIMEOUT_SEC: ${PROVISION_TIMEOUT_SEC:-180}
+
+      # Só deixa escolher quem joga com o PC do jogo online (host + ponte)
+      REQUIRE_ONLINE: ${REQUIRE_ONLINE:-1}
+      REQUIRE_BRIDGE: ${REQUIRE_BRIDGE:-1}
+
+      # Rede WebRTC (TURN opcional, necessário para jogadores atrás de CGNAT)
+      STUN_URL: ${STUN_URL:-stun:stun.l.google.com:19302}
+      TURN_URL: ${TURN_URL:-}
+      TURN_USERNAME: ${TURN_USERNAME:-}
+      TURN_CREDENTIAL: ${TURN_CREDENTIAL:-}
+    volumes:
+      - app-data:/data
+    expose:
+      - "8080"
+
+volumes:
+  app-data:
