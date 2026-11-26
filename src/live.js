@@ -5,7 +5,7 @@ import { bad, conflict, notFound } from './errors.js';
 import { now } from './util.js';
 import { config } from './config.js';
 import { assertOnline } from './availability.js';
-import { slotStatus, startGuestSession } from './sessions.js';
+import { ACTIVE_STATUSES, remainingMs, slotStatus, startGuestSession } from './sessions.js';
 
 /**
  * Modo live: o espectador da live do YouTube entra numa sala com um apelido e
@@ -83,7 +83,24 @@ function cleanNick(value) {
 export function publicLive(t = now()) {
   prune(t);
   const { enabled, videoId } = liveSettings();
-  return { enabled: Boolean(enabled && videoId), videoId: enabled ? videoId : null, viewers: lobby.size };
+  const session = store.data.session;
+  const activeSession = session && ACTIVE_STATUSES.includes(session.status) ? session : null;
+  const queue = [...lobby.values()]
+    .filter((viewer) => viewer.id !== activeSession?.guestViewerId)
+    .sort((a, b) => a.joinedAt - b.joinedAt)
+    .map((viewer) => viewer.nick);
+  const timeLeft = session?.status === 'active' ? remainingMs(session, t) : 0;
+  const playing = timeLeft > 0
+    ? { name: session.customer.name, remainingMs: timeLeft }
+    : null;
+
+  return {
+    enabled: Boolean(enabled && videoId),
+    videoId: enabled ? videoId : null,
+    viewers: lobby.size,
+    queue,
+    playing,
+  };
 }
 
 export function joinLobby(nickInput) {

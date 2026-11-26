@@ -82,6 +82,10 @@ test('live: sala por apelido, dono escolhe, escolhido ganha acesso sem pagar', a
   const homeHtml = await home.text();
   assert.match(homeHtml, /<iframe id="player" referrerpolicy="origin"/);
   assert.match(homeHtml, /<iframe class="chat-frame" id="chat" referrerpolicy="origin"/);
+  assert.match(homeHtml, /id="playingCard"/);
+  assert.match(homeHtml, /id="playingName"/);
+  assert.match(homeHtml, /id="playingTime"/);
+  assert.match(homeHtml, /id="queueList"/);
   assert.match(homeHtml, /id="chatMobile"/);
   assert.match(homeHtml, /id="youtubeChatLink" target="_blank" rel="noopener"/);
 
@@ -99,7 +103,10 @@ test('live: sala por apelido, dono escolhe, escolhido ganha acesso sem pagar', a
   assert.equal((await admin('live_set', { url: 'https://evil.com/x', enabled: true })).status, 400);
   const set = await admin('live_set', { url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ', enabled: true });
   assert.equal(set.status, 200);
-  assert.equal((await call('/api/live')).data.videoId, 'dQw4w9WgXcQ');
+  let publicLive = (await call('/api/live')).data;
+  assert.equal(publicLive.videoId, 'dQw4w9WgXcQ');
+  assert.deepEqual(publicLive.queue, []);
+  assert.equal(publicLive.playing, null);
 
   // Apelido inválido
   assert.equal((await call('/api/live/join', { method: 'POST', body: { nick: 'A' } })).status, 400);
@@ -107,6 +114,11 @@ test('live: sala por apelido, dono escolhe, escolhido ganha acesso sem pagar', a
   const ana = (await call('/api/live/join', { method: 'POST', body: { nick: 'Ana' } })).data;
   const bia = (await call('/api/live/join', { method: 'POST', body: { nick: 'Bia' } })).data;
   assert.ok(ana.viewerId && bia.viewerId);
+  publicLive = (await call('/api/live')).data;
+  assert.deepEqual(publicLive.queue, ['Ana', 'Bia']);
+  assert.equal(publicLive.viewers, 2);
+  assert.equal(publicLive.playing, null);
+  assert.ok(!JSON.stringify(publicLive).includes(ana.viewerId));
 
   // O painel vê os dois, sem expor o segredo de cada um
   let overview = (await call('/api/admin/overview', { cookie })).data;
@@ -145,6 +157,9 @@ test('live: sala por apelido, dono escolhe, escolhido ganha acesso sem pagar', a
 
   pick = await admin('live_pick', { pub: anaPub, minutes: 7 });
   assert.equal(pick.status, 200);
+  publicLive = (await call('/api/live')).data;
+  assert.deepEqual(publicLive.queue, ['Bia']);
+  assert.equal(publicLive.playing, null);
 
   // Só a Ana recebe o link de jogar; a Bia não
   const meAna = (await call(`/api/live/me?v=${ana.viewerId}`)).data;
@@ -171,6 +186,12 @@ test('live: sala por apelido, dono escolhe, escolhido ganha acesso sem pagar', a
   await until(async () => (await call(`/api/session?s=${encodeURIComponent(token)}`)).data.status === 'active');
   session = (await call(`/api/session?s=${encodeURIComponent(token)}`)).data;
   assert.ok(session.remainingMs > 6.9 * 60_000 && session.remainingMs <= 7 * 60_000);
+  publicLive = (await call('/api/live')).data;
+  assert.deepEqual(publicLive.queue, ['Bia']);
+  assert.deepEqual(Object.keys(publicLive.playing).sort(), ['name', 'remainingMs']);
+  assert.equal(publicLive.playing.name, 'Ana');
+  assert.ok(publicLive.playing.remainingMs > 6.9 * 60_000);
+  assert.ok(!JSON.stringify(publicLive).includes(token));
 
   // O dono pode somar minutos
   assert.equal((await admin('extend', { minutes: 5 })).status, 200);
@@ -182,6 +203,9 @@ test('live: sala por apelido, dono escolhe, escolhido ganha acesso sem pagar', a
   // Dono encerra → a Ana perde o acesso
   await admin('end_session', { reason: 'admin' });
   assert.equal((await call(`/api/live/me?v=${ana.viewerId}`)).data.chosen, false);
+  publicLive = (await call('/api/live')).data;
+  assert.equal(publicLive.playing, null);
+  assert.deepEqual(publicLive.queue, ['Ana', 'Bia']);
 
   // Quem sai da sala não aparece mais; fechar a sala limpa tudo
   await call('/api/live/leave', { method: 'POST', body: { viewerId: bia.viewerId } });

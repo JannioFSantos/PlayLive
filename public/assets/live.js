@@ -1,4 +1,4 @@
-import { api } from './common.js';
+import { api, fmtClock } from './common.js';
 import { resolveLanguage, translate } from './live-i18n.js';
 
 const $ = (id) => document.getElementById(id);
@@ -18,6 +18,7 @@ const errorKeys = {
 let viewerId = null;
 let nick = null;
 let shownVideo = null;
+let playingDeadline = null;
 
 function applyLanguage() {
   document.documentElement.lang = language === 'pt' ? 'pt-BR' : language;
@@ -60,6 +61,37 @@ function say(text, bad = false) {
   $('msg').style.color = bad ? 'var(--danger, #ff5d6c)' : '';
 }
 
+function renderQueue(queue) {
+  const list = $('queueList');
+  const fragment = document.createDocumentFragment();
+  for (const name of queue) {
+    const item = document.createElement('li');
+    item.textContent = name;
+    fragment.append(item);
+  }
+  list.replaceChildren(fragment);
+  const empty = queue.length === 0;
+  $('queueEmpty').classList.toggle('hidden', !empty);
+  list.classList.toggle('hidden', empty);
+}
+
+function renderPlaying(playing) {
+  if (!playing) {
+    playingDeadline = null;
+    $('playingCard').classList.add('hidden');
+    return;
+  }
+  $('playingName').textContent = playing.name;
+  playingDeadline = Date.now() + playing.remainingMs;
+  $('playingCard').classList.remove('hidden');
+  updatePlayingClock();
+}
+
+function updatePlayingClock() {
+  if (playingDeadline === null) return;
+  $('playingTime').textContent = fmtClock(Math.max(0, playingDeadline - Date.now()));
+}
+
 function showRoom(joined, name) {
   $('joinForm').classList.toggle('hidden', joined);
   $('inRoom').classList.toggle('hidden', !joined);
@@ -89,6 +121,8 @@ async function refresh() {
     const info = await api('/api/live');
     $('offCard').classList.toggle('hidden', info.enabled);
     $('liveGrid').classList.toggle('hidden', !info.enabled);
+    renderQueue(Array.isArray(info.queue) ? info.queue : []);
+    renderPlaying(info.playing);
     if (info.enabled) {
       mountVideo(info.videoId);
       $('roomBadge').textContent = t('roomCount', {
@@ -161,3 +195,4 @@ $('leaveBtn').addEventListener('click', async () => {
 applyLanguage();
 refresh();
 setInterval(refresh, 5000);
+setInterval(updatePlayingClock, 1000);

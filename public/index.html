@@ -13,6 +13,9 @@
     .chat-box { position: relative; height: 560px; background: #0b0b12; border-radius: 14px; overflow: hidden; }
     .chat-mobile-fallback { height: auto; min-height: 220px; padding: 24px; display: grid; place-items: center; text-align: center; }
     .chat-mobile-fallback p { max-width: 420px; color: var(--muted); line-height: 1.6; }
+    .queue-section { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line); }
+    .player-queue { margin: 0; padding-left: 1.5rem; }
+    .player-queue li { padding: 4px 0; }
     .turn { border: 1px solid rgba(74, 222, 128, 0.5); background: rgba(74, 222, 128, 0.1); }
     @media (max-width: 900px) {
       .live-grid { grid-template-columns: 1fr; }
@@ -45,6 +48,12 @@
       <p class="muted" data-i18n="offDescription">Volte quando o dono começar a transmissão.</p>
     </div>
 
+    <div class="card hidden" id="playingCard">
+      <div class="card-head"><h2 data-i18n="playingTitle">Jogando agora</h2></div>
+      <div class="kv"><span class="k" data-i18n="timeRemaining">Tempo restante</span><span class="v" id="playingTime">—</span></div>
+      <div class="kv"><span class="k" data-i18n="currentPlayer">Jogador</span><span class="v" id="playingName">—</span></div>
+    </div>
+
     <div class="live-grid hidden" id="liveGrid">
       <div class="stack">
         <div class="live-frame"><iframe id="player" referrerpolicy="origin" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen title="Live"></iframe></div>
@@ -63,6 +72,11 @@
             <button class="btn btn-ghost btn-sm" id="leaveBtn" data-i18n="leaveButton">sair da sala</button>
           </div>
           <p class="tiny" id="msg" style="margin-bottom: 0;"></p>
+          <div class="queue-section">
+            <h3 data-i18n="queueTitle">Fila para jogar</h3>
+            <p class="tiny muted" id="queueEmpty" data-i18n="queueEmpty">Ainda não há ninguém na fila.</p>
+            <ol class="player-queue hidden" id="queueList"></ol>
+          </div>
         </div>
       </div>
       <div class="chat-box" id="chatEmbed"><iframe class="chat-frame" id="chat" referrerpolicy="origin" title="Chat da live"></iframe></div>
