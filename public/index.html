@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Ao vivo — Play Live</title>
+  <meta name="theme-color" content="#06060a" />
+  <link rel="stylesheet" href="/assets/style.css" />
+  <style>
+    .live-grid { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 16px; align-items: start; }
+    .live-frame { position: relative; width: 100%; aspect-ratio: 16 / 9; background: #000; border-radius: 14px; overflow: hidden; }
+    .live-frame iframe, .chat-frame { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+    .chat-box { position: relative; height: 560px; background: #0b0b12; border-radius: 14px; overflow: hidden; }
+    .turn { border: 1px solid rgba(74, 222, 128, 0.5); background: rgba(74, 222, 128, 0.1); }
+    @media (max-width: 900px) {
+      .live-grid { grid-template-columns: 1fr; }
+      .chat-box { height: 420px; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="wrap topbar-inner">
+      <a class="brand" href="/"><span class="brand-mark">▶</span>PLAY<span>LIVE</span></a>
+      <div class="badge"><span class="dot live"></span><span>ao vivo</span></div>
+      <nav><a href="/">Site</a></nav>
+    </div>
+  </header>
+
+  <main class="wrap page" style="max-width: 1280px;">
+    <div class="card turn hidden" id="turnCard" style="margin-bottom: 16px;">
+      <div class="row between">
+        <div>
+          <h2 style="margin: 0;">🎮 É a sua vez, <span id="turnNick"></span>!</h2>
+          <p class="muted tiny" style="margin: 6px 0 0;" id="turnHint">Conecte seu controle e entre agora.</p>
+        </div>
+        <a class="btn btn-primary btn-lg" id="turnBtn" href="#">Jogar agora</a>
+      </div>
+    </div>
+
+    <div class="card hidden" id="offCard">
+      <h2 style="margin-top: 0;">A live não está aberta agora</h2>
+      <p class="muted">Volte quando o dono começar a transmissão.</p>
+    </div>
+
+    <div class="live-grid hidden" id="liveGrid">
+      <div class="stack">
+        <div class="live-frame"><iframe id="player" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen title="Live"></iframe></div>
+        <div class="card" id="joinCard">
+          <div class="card-head"><h2>Quer jogar?</h2><span class="badge" id="roomBadge">—</span></div>
+          <p class="muted tiny" style="margin-top: 0;">
+            Entre na sala com um apelido. O dono escolhe quem joga; se for você, o botão de jogar aparece aqui,
+            sem precisar sair da live. Tenha um controle conectado ao aparelho (USB ou Bluetooth).
+          </p>
+          <form id="joinForm" class="row">
+            <input id="nick" type="text" maxlength="24" placeholder="Seu apelido" autocomplete="off" style="flex: 1; min-width: 160px;" />
+            <button class="btn btn-primary" type="submit" id="joinBtn">Entrar na sala</button>
+          </form>
+          <div class="row hidden" id="inRoom">
+            <span>Você está na sala como <strong id="inRoomNick"></strong>. Aguarde ser escolhido.</span>
+            <span class="grow"></span>
+            <button class="btn btn-ghost btn-sm" id="leaveBtn">sair da sala</button>
+          </div>
+          <p class="tiny" id="msg" style="margin-bottom: 0;"></p>
+        </div>
+      </div>
+      <div class="chat-box"><iframe class="chat-frame" id="chat" title="Chat da live"></iframe></div>
+    </div>
+  </main>
+
+  <script type="module" src="/assets/live.js"></script>
+</body>
+</html>
