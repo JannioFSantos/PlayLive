@@ -45,7 +45,7 @@
 
     <div class="live-grid hidden" id="liveGrid">
       <div class="stack">
-        <div class="live-frame"><iframe id="player" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen title="Live"></iframe></div>
+        <div class="live-frame"><iframe id="player" referrerpolicy="origin" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen title="Live"></iframe></div>
         <div class="card" id="joinCard">
           <div class="card-head"><h2>Quer jogar?</h2><span class="badge" id="roomBadge">—</span></div>
           <p class="muted tiny" style="margin-top: 0;">
@@ -64,7 +64,7 @@
           <p class="tiny" id="msg" style="margin-bottom: 0;"></p>
         </div>
       </div>
-      <div class="chat-box"><iframe class="chat-frame" id="chat" title="Chat da live"></iframe></div>
+      <div class="chat-box"><iframe class="chat-frame" id="chat" referrerpolicy="origin" title="Chat da live"></iframe></div>
     </div>
   </main>
 

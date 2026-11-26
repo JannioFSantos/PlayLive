@@ -77,6 +77,12 @@ test('live: sala por apelido, dono escolhe, escolhido ganha acesso sem pagar', a
     return { status: res.status, data: text ? JSON.parse(text) : null, headers: res.headers };
   };
 
+  const home = await fetch(base);
+  assert.equal(home.headers.get('referrer-policy'), 'no-referrer');
+  const homeHtml = await home.text();
+  assert.match(homeHtml, /<iframe id="player" referrerpolicy="origin"/);
+  assert.match(homeHtml, /<iframe class="chat-frame" id="chat" referrerpolicy="origin"/);
+
   const login = await call('/api/admin/login', { method: 'POST', body: { password: PASSWORD } });
   const cookie = login.headers.get('set-cookie').split(';')[0];
   const admin = (action, extra = {}) => call('/api/admin/action', {
