@@ -24,8 +24,8 @@
   <header class="topbar">
     <div class="wrap topbar-inner">
       <a class="brand" href="/"><span class="brand-mark">▶</span>PLAY<span>LIVE</span></a>
-      <div class="badge"><span class="dot live"></span><span>ao vivo</span></div>
-      <nav><a href="/">Site</a></nav>
+      <div class="badge"><span class="dot live"></span><span data-i18n="liveBadge">ao vivo</span></div>
+      <nav><a href="/" data-i18n="homeLink">Site</a></nav>
     </div>
   </header>
 
@@ -33,35 +33,34 @@
     <div class="card turn hidden" id="turnCard" style="margin-bottom: 16px;">
       <div class="row between">
         <div>
-          <h2 style="margin: 0;">🎮 É a sua vez, <span id="turnNick"></span>!</h2>
-          <p class="muted tiny" style="margin: 6px 0 0;" id="turnHint">Conecte seu controle e entre agora.</p>
+          <h2 id="turnTitle" style="margin: 0;">🎮 É a sua vez!</h2>
+          <p class="muted tiny" style="margin: 6px 0 0;" id="turnHint" data-i18n="turnHint">Entre agora; no celular ou tablet, os comandos aparecem na tela.</p>
         </div>
-        <a class="btn btn-primary btn-lg" id="turnBtn" href="#">Jogar agora</a>
+        <a class="btn btn-primary btn-lg" id="turnBtn" href="#" data-i18n="playNow">Jogar agora</a>
       </div>
     </div>
 
     <div class="card hidden" id="offCard">
-      <h2 style="margin-top: 0;">A live não está aberta agora</h2>
-      <p class="muted">Volte quando o dono começar a transmissão.</p>
+      <h2 style="margin-top: 0;" data-i18n="offTitle">A live não está aberta agora</h2>
+      <p class="muted" data-i18n="offDescription">Volte quando o dono começar a transmissão.</p>
     </div>
 
     <div class="live-grid hidden" id="liveGrid">
       <div class="stack">
         <div class="live-frame"><iframe id="player" referrerpolicy="origin" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen title="Live"></iframe></div>
         <div class="card" id="joinCard">
-          <div class="card-head"><h2>Quer jogar?</h2><span class="badge" id="roomBadge">—</span></div>
-          <p class="muted tiny" style="margin-top: 0;">
-            Entre na sala com um apelido. O dono escolhe quem joga; se for você, o botão de jogar aparece aqui,
-            sem precisar sair da live. Use um controle conectado ou os comandos na tela pelo celular ou tablet.
+          <div class="card-head"><h2 data-i18n="joinTitle">Quer jogar?</h2><span class="badge" id="roomBadge">—</span></div>
+          <p class="muted tiny" style="margin-top: 0;" data-i18n="joinDescription">
+            Entre na sala com um apelido. O dono escolhe quem joga; se for você, o botão de jogar aparece aqui, sem precisar sair da live. Use um controle conectado ou os comandos na tela pelo celular ou tablet.
           </p>
           <form id="joinForm" class="row">
             <input id="nick" type="text" maxlength="24" placeholder="Seu apelido" autocomplete="off" style="flex: 1; min-width: 160px;" />
-            <button class="btn btn-primary" type="submit" id="joinBtn">Entrar na sala</button>
+            <button class="btn btn-primary" type="submit" id="joinBtn" data-i18n="joinButton">Entrar na sala</button>
           </form>
           <div class="row hidden" id="inRoom">
-            <span>Você está na sala como <strong id="inRoomNick"></strong>. Aguarde ser escolhido.</span>
+            <span><span data-i18n="joinedPrefix">Você está na sala como </span><strong id="inRoomNick"></strong><span data-i18n="joinedSuffix">. Aguarde ser escolhido.</span></span>
             <span class="grow"></span>
-            <button class="btn btn-ghost btn-sm" id="leaveBtn">sair da sala</button>
+            <button class="btn btn-ghost btn-sm" id="leaveBtn" data-i18n="leaveButton">sair da sala</button>
           </div>
           <p class="tiny" id="msg" style="margin-bottom: 0;"></p>
         </div>
@@ -69,9 +68,9 @@
       <div class="chat-box" id="chatEmbed"><iframe class="chat-frame" id="chat" referrerpolicy="origin" title="Chat da live"></iframe></div>
       <div class="chat-box chat-mobile-fallback hidden" id="chatMobile">
         <div>
-          <h2>Chat no celular ou tablet</h2>
-          <p>O YouTube não permite incorporar o chat ao vivo na web móvel. Abra a live no YouTube para assistir e comentar.</p>
-          <a class="btn btn-primary" id="youtubeChatLink" target="_blank" rel="noopener">Abrir live e chat no YouTube</a>
+          <h2 data-i18n="chatTitle">Chat no celular ou tablet</h2>
+          <p data-i18n="chatDescription">O YouTube não permite incorporar o chat ao vivo na web móvel. Abra a live no YouTube para assistir e comentar.</p>
+          <a class="btn btn-primary" id="youtubeChatLink" target="_blank" rel="noopener" data-i18n="chatButton">Abrir live e chat no YouTube</a>
         </div>
       </div>
     </div>
