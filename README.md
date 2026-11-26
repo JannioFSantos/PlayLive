@@ -22,7 +22,7 @@ Espectadores ──> página inicial (/) ──┐                              
 
 - **Página inicial (`/`)**: mostra o player e o chat do YouTube e uma sala onde o espectador entra com um apelido.
 - **Painel (`/admin`)**: você cola o link da live, abre a sala, define os minutos e clica em **escolher**.
-- **Jogador (`/play`)**: recebe o vídeo do jogo em tempo real e envia o controle (Gamepad API do navegador).
+- **Jogador (`/play`)**: recebe o vídeo do jogo em tempo real e envia comandos por controle físico (Gamepad API) ou pelos controles de toque em celulares e tablets.
 - **Host (`/host`)**: roda no PC do jogo; captura a placa de captura (Xbox) ou uma janela (jogo de PC) e transmite por WebRTC.
 - **Ponte de controle** (`tools/gamepad-bridge`): no Windows, transforma os comandos do jogador em um controle Xbox 360 virtual, para jogos de PC.
 - O vídeo vai **direto** do host para o jogador (P2P); o servidor só faz a sinalização.
@@ -35,7 +35,7 @@ Espectadores ──> página inicial (/) ──┐                              
 | PC do jogo (host) | Navegador Chrome/Edge atualizado, internet estável com bom upload (4 a 8 Mbps por jogador). |
 | Jogar jogos de PC | Windows 10/11, Python 3 e o driver **ViGEmBus** (para a ponte de controle). |
 | Jogar Xbox físico | Placa de captura HDMI reconhecida como câmera (UVC) **e** uma forma de controlar o console (veja [Limites](#limites-e-avisos)). |
-| Quem joga | Controle (USB ou Bluetooth) conectado ao aparelho; Chrome/Edge no PC ou Android. |
+| Quem joga | Chrome/Edge no PC ou navegador moderno no celular/tablet; controle USB/Bluetooth ou controles de toque na tela. |
 | Sua live | Uma live no YouTube **com chat ativado** e, de preferência, incorporação permitida. |
 
 ## Início rápido (teste local)
