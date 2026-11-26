@@ -74,6 +74,17 @@ export function configureLive({ url, enabled }) {
   return liveSettings();
 }
 
+export function stopLive() {
+  store.mutate((state) => {
+    state.live = { enabled: false, videoId: null };
+    pushEvent(state, 'live.stopped');
+  });
+  lobby.clear();
+  resetLiveChat(false);
+  bus.emit('state:changed');
+  return liveSettings();
+}
+
 function prune(t = now()) {
   for (const [key, viewer] of lobby) {
     if (t - viewer.seenAt > STALE_MS) lobby.delete(key);
@@ -93,19 +104,20 @@ export function publicLive(t = now()) {
   const { enabled, videoId } = liveSettings();
   const session = store.data.session;
   const activeSession = session && ACTIVE_STATUSES.includes(session.status) ? session : null;
+  const enabledNow = Boolean(enabled && videoId);
   const queue = [...lobby.values()]
     .filter((viewer) => viewer.id !== activeSession?.guestViewerId)
     .sort((a, b) => a.joinedAt - b.joinedAt)
     .map((viewer) => viewer.nick);
   const timeLeft = session?.status === 'active' ? remainingMs(session, t) : 0;
-  const playing = timeLeft > 0
+  const playing = enabledNow && timeLeft > 0
     ? { name: session.customer.name, remainingMs: timeLeft }
     : null;
   const chat = liveChatStatus();
 
   return {
-    enabled: Boolean(enabled && videoId),
-    videoId: enabled ? videoId : null,
+    enabled: enabledNow,
+    videoId: enabledNow ? videoId : null,
     viewers: lobby.size,
     queue,
     playing,

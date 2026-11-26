@@ -46,6 +46,7 @@ import {
   leaveLobby,
   pickViewer,
   publicLive,
+  stopLive,
   viewerStatus,
 } from './live.js';
 
@@ -260,6 +261,9 @@ app.post('/api/admin/action', asyncH(async (req, res) => {
       const settings = configureLive({ url: payload.url, enabled: payload.enabled });
       return res.json({ ok: true, live: settings });
     }
+
+    case 'live_stop':
+      return res.json({ ok: true, live: stopLive() });
 
     case 'live_chat_toggle': {
       const live = liveSettings();

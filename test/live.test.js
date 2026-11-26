@@ -89,6 +89,8 @@ test('live: sala por apelido, dono escolhe, escolhido ganha acesso sem pagar', a
   assert.match(homeHtml, /id="playingName"/);
   assert.match(homeHtml, /id="playingTime"/);
   assert.match(homeHtml, /id="queueList"/);
+  const adminHtml = await (await fetch(`${base}/admin`)).text();
+  assert.match(adminHtml, /id="liveStop"[^>]*>STOP<\/button>/);
 
   const login = await call('/api/admin/login', { method: 'POST', body: { password: PASSWORD } });
   const cookie = login.headers.get('set-cookie').split(';')[0];
@@ -119,8 +121,9 @@ test('live: sala por apelido, dono escolhe, escolhido ganha acesso sem pagar', a
   // Apelido inválido
   assert.equal((await call('/api/live/join', { method: 'POST', body: { nick: 'A' } })).status, 400);
 
-  const ana = (await call('/api/live/join', { method: 'POST', body: { nick: 'Ana' } })).data;
-  const bia = (await call('/api/live/join', { method: 'POST', body: { nick: 'Bia' } })).data;
+  let ana = (await call('/api/live/join', { method: 'POST', body: { nick: 'Ana' } })).data;
+  let bia = (await call('/api/live/join', { method: 'POST', body: { nick: 'Bia' } })).data;
+  const selectedAnaViewerId = ana.viewerId;
   assert.ok(ana.viewerId && bia.viewerId);
   publicLive = (await call('/api/live')).data;
   assert.deepEqual(publicLive.queue, ['Ana', 'Bia']);
@@ -267,9 +270,33 @@ test('live: sala por apelido, dono escolhe, escolhido ganha acesso sem pagar', a
   overview = (await call('/api/admin/overview', { cookie })).data;
   assert.equal(overview.counters.sessionsTotal, 1);
 
+  // STOP tira o vídeo do site, mas não encerra a sessão de jogo nem a live do YouTube
+  const stopped = await admin('live_stop');
+  assert.equal(stopped.status, 200);
+  assert.deepEqual(stopped.data.live, { enabled: false, videoId: null });
+  session = (await call(`/api/session?s=${encodeURIComponent(token)}`)).data;
+  assert.equal(session.status, 'active');
+  publicLive = (await call('/api/live')).data;
+  assert.equal(publicLive.enabled, false);
+  assert.equal(publicLive.videoId, null);
+  assert.deepEqual(publicLive.queue, []);
+  assert.equal(publicLive.playing, null);
+  assert.equal(publicLive.chatEnabled, false);
+
+  // Reabre a sala para confirmar que ela começa limpa; a sessão atual continua em andamento
+  await admin('live_set', { url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ', enabled: true });
+  ana = (await call('/api/live/join', { method: 'POST', body: { nick: 'Ana' } })).data;
+  bia = (await call('/api/live/join', { method: 'POST', body: { nick: 'Bia' } })).data;
+  assert.deepEqual((await call('/api/live')).data.queue, ['Ana', 'Bia']);
+  const reopenedChat = await call('/api/live/chat/read', {
+    method: 'POST',
+    body: { viewerId: ana.viewerId },
+  });
+  assert.deepEqual(reopenedChat.data.messages, []);
+
   // Dono encerra → a Ana perde o acesso
   await admin('end_session', { reason: 'admin' });
-  assert.equal((await call(`/api/live/me?v=${ana.viewerId}`)).data.chosen, false);
+  assert.equal((await call(`/api/live/me?v=${selectedAnaViewerId}`)).data.chosen, false);
   publicLive = (await call('/api/live')).data;
   assert.equal(publicLive.playing, null);
   assert.deepEqual(publicLive.queue, ['Ana', 'Bia']);

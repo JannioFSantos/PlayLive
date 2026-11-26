@@ -21,7 +21,7 @@ YouTube live --vídeo--> página inicial (/) <--apelido-- Espectadores
 ```
 
 - **Página inicial (`/`)**: mostra a live, a fila e o chat próprio. Só quem entrou na fila pode ler e enviar mensagens; o apelido da fila identifica a pessoa.
-- **Painel (`/admin`)**: você cola o link da live, abre a sala, define os minutos e clica em **escolher**.
+- **Painel (`/admin`)**: você cola o link da live, abre a sala, define os minutos e clica em **escolher**. **STOP** remove o player do PlayLive e limpa fila/chat, mas não encerra a live do YouTube nem uma sessão de jogo ativa.
 - **Jogador (`/play`)**: recebe o vídeo do jogo em tempo real e envia comandos por controle físico (Gamepad API) ou pelos controles de toque em celulares e tablets.
 - **Host (`/host`)**: roda no PC do jogo; captura a placa de captura (Xbox) ou uma janela (jogo de PC) e transmite por WebRTC.
 - **Ponte de controle** (`tools/gamepad-bridge`): no Windows, transforma os comandos do jogador em um controle Xbox 360 virtual, para jogos de PC.

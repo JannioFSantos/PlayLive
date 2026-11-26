@@ -288,6 +288,7 @@ function renderLive() {
   $('liveBadge').textContent = live.enabled ? 'sala aberta' : 'desligada';
   $('liveBadge').className = `badge ${live.enabled ? 'green' : ''}`;
   $('liveCount').textContent = `${live.viewers.length} na sala`;
+  $('liveStop').disabled = !live.enabled && !live.videoId;
   const chat = live.chat ?? { enabled: false, messageCount: 0 };
   $('liveChatStatus').textContent = `Chat ${chat.enabled ? 'ativo' : 'pausado'} · ${chat.messageCount} mensagens`;
   $('liveChatToggle').textContent = chat.enabled ? 'pausar chat' : 'abrir chat';
@@ -329,6 +330,13 @@ document.addEventListener('click', async (event) => {
       });
       delete $('liveUrl').dataset.dirty;
       toast('Live salva.', 'green');
+    } else if (kind === 'stop') {
+      if (!confirm('Remover o link da página principal e fechar a sala? A transmissão do YouTube e a sessão de jogo atual continuarão ativas. A fila e o chat serão limpos.')) return;
+      await api('/api/admin/action', { method: 'POST', body: { action: 'live_stop' } });
+      delete $('liveUrl').dataset.dirty;
+      $('liveUrl').value = '';
+      $('liveEnabled').checked = false;
+      toast('Link removido da página principal. O YouTube continua transmitindo.', 'green');
     } else if (kind === 'pick') {
       const minutes = Number($('liveMinutes').value);
       const result = await api('/api/admin/action', {
@@ -350,6 +358,7 @@ document.addEventListener('click', async (event) => {
   } catch (err) {
     toast(err.message, 'danger');
   } finally {
-    btn.disabled = false;
+    const live = overview?.live;
+    btn.disabled = kind === 'stop' && !live?.enabled && !live?.videoId;
   }
 });

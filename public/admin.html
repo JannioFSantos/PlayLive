@@ -51,7 +51,10 @@
             <div class="stack">
               <div class="field">
                 <label for="liveUrl">Link da live</label>
-                <input id="liveUrl" type="text" placeholder="https://www.youtube.com/watch?v=..." autocomplete="off" />
+                <div class="row">
+                  <input id="liveUrl" type="text" placeholder="https://www.youtube.com/watch?v=..." autocomplete="off" style="flex: 1; min-width: 180px;" />
+                  <button class="btn btn-danger btn-sm" type="button" data-live="stop" id="liveStop" title="Remove o vídeo da página principal sem encerrar a live do YouTube." disabled>STOP</button>
+                </div>
               </div>
               <div class="row">
                 <label style="display: flex; align-items: center; gap: 8px; text-transform: none; letter-spacing: 0; font-size: 14px;"><input type="checkbox" id="liveEnabled" style="width: auto;" /> Abrir sala para jogar</label>
