@@ -547,21 +547,6 @@ input::placeholder { color: var(--muted-2); }
 
 .player-top .spacer { flex: 1; }
 
-.player-forfeit {
-  position: absolute;
-  top: 66px;
-  right: 14px;
-  z-index: 5;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.2s;
-}
-
-.player-shell.show-ui .player-forfeit {
-  opacity: 1;
-  pointer-events: auto;
-}
-
 .pill {
   display: inline-flex;
   align-items: center;
@@ -777,12 +762,6 @@ input::placeholder { color: var(--muted-2); }
   .player-shell.touch-device .player-top .spacer { display: none; }
   .player-shell.touch-device .player-top .pill { padding: 5px 8px; font-size: 11px; }
   .player-shell.touch-device .player-top .btn { padding: 6px 8px; font-size: 11px; }
-  .player-shell.touch-device .player-forfeit {
-    top: max(88px, calc(env(safe-area-inset-top) + 80px));
-    right: auto;
-    left: 50%;
-    transform: translateX(-50%);
-  }
   .player-shell.touch-device .touch-shoulders {
     top: max(96px, calc(env(safe-area-inset-top) + 88px));
   }
