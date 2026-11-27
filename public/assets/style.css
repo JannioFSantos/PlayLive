@@ -785,6 +785,25 @@ input::placeholder { color: var(--muted-2); }
 
 .stats-panel .row { justify-content: space-between; }
 
+.player-shell.touch-device .player-top {
+  left: 50%;
+  right: auto;
+  width: max-content;
+  max-width: 200vw;
+  justify-content: center;
+  flex-wrap: wrap;
+  transform: translateX(-50%) scale(0.5);
+  transform-origin: top center;
+}
+
+.player-shell.touch-device .stats-panel {
+  top: calc(env(safe-area-inset-top) + 72px);
+  left: 50%;
+  right: auto;
+  transform: translateX(-50%) scale(0.5);
+  transform-origin: top center;
+}
+
 /* ------------------------------ modal ------------------------------- */
 
 .modal-back {

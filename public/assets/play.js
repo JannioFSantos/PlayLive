@@ -497,6 +497,7 @@ function bindUI() {
   poke();
 
   const video = $('video');
+  $('stage').addEventListener('contextmenu', (event) => event.preventDefault());
   video.addEventListener('playing', () => {
     if (!ended) {
       $('shell').classList.add('touch-ready');
