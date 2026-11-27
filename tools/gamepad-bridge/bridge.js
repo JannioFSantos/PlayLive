@@ -13,11 +13,24 @@
  *   --key / HOST_KEY        chave do host (padrão: lê data/host-key.txt)
  *   --python / BRIDGE_PYTHON  executável do Python (padrão: python no Windows)
  *   --dry-run / BRIDGE_DRY_RUN=1
+ *   --local-port / BRIDGE_LOCAL_PORT   porta do canal local (padrão 8765; 0 desliga)
+ *   BRIDGE_ALLOWED_ORIGINS  origens extras aceitas no canal local (separadas por vírgula)
+ *
+ * Caminhos dos comandos:
+ *   P2P (preferido): player ──WebRTC DataChannel──> /host (navegador) ──ws://127.0.0.1──> ponte
+ *   Reserva:         player ──WebSocket──> servidor ──WebSocket──> ponte
+ * Nos dois casos a ponte só aplica comandos enquanto o SERVIDOR diz que há
+ * sessão ativa; o canal local nunca decide isso sozinho.
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import http from 'node:http';
+import { EventEmitter } from 'node:events';
 import { spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+
+import { createWebSocketServer } from '../../src/ws.js';
+import { safeEqual } from '../../src/util.js';
 
 import { ALL_BUTTONS, isNeutral, mapPayload, neutralState, sameState } from './mapping.js';
 
@@ -28,6 +41,19 @@ const WATCHDOG_MS = 3000; // o player reenvia ao menos 1x/s; sem sinal → solta
 const PING_MS = 20_000;
 const BACKOFF_MIN_MS = 1000;
 const BACKOFF_MAX_MS = 10_000;
+const DEFAULT_LOCAL_PORT = 8765;
+const LOCAL_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]']);
+
+/** Origem do site a partir da URL do servidor (wss://x/ws → https://x). */
+export function originFromServerUrl(url) {
+  try {
+    const u = new URL(url);
+    const protocol = u.protocol === 'wss:' ? 'https:' : 'http:';
+    return `${protocol}//${u.host}`;
+  } catch {
+    return null;
+  }
+}
 
 /* ------------------------------------------------------------------ */
 /* Sinks: onde o estado do controle é aplicado                         */
@@ -172,6 +198,8 @@ export function createBridge({
   onFatal = () => {},
   watchdogMs = WATCHDOG_MS,
   WebSocketImpl = globalThis.WebSocket,
+  localPort = null, // null = canal local desligado; 0 = porta efêmera (testes)
+  allowedOrigins = [],
 }) {
   let ws = null;
   let stopped = false;
@@ -183,7 +211,13 @@ export function createBridge({
   let sessionActive = false;
   let applied = neutralState();
   let lastInputAt = 0;
-  const stats = { inputs: 0, applied: 0, ignored: 0, releases: 0 };
+  const stats = { inputs: 0, applied: 0, ignored: 0, releases: 0, localInputs: 0, wsInputs: 0 };
+
+  // Canal local: o /host (navegador) entrega aqui os comandos recebidos por P2P.
+  let localServer = null;
+  let localClient = null;
+  let lastSource = 'ws';
+  const origins = new Set([originFromServerUrl(url), ...allowedOrigins].filter(Boolean));
 
   function safeApply(state) {
     try {
@@ -208,11 +242,19 @@ export function createBridge({
       sessionActive = active;
       log(active ? 'Sessão ativa: controle liberado.' : 'Sem sessão ativa: controle bloqueado.');
       if (!active) release('sessão encerrada');
+      sendLocal({ type: 'session', active });
     }
   }
 
-  function handleInput(payload) {
+  function sendLocal(message) {
+    if (localClient?.readyState === 1) localClient.send(JSON.stringify(message));
+  }
+
+  function handleInput(payload, source = 'ws') {
     stats.inputs++;
+    if (source === 'local') stats.localInputs++;
+    else stats.wsInputs++;
+    lastSource = source;
     if (!sessionActive) {
       stats.ignored++;
       return;
@@ -246,7 +288,11 @@ export function createBridge({
         updateSession(msg.state);
         break;
       case 'input':
-        handleInput(msg.payload);
+        handleInput(msg.payload, 'ws');
+        break;
+      case 'input:ping':
+        // Sonda de latência do caminho WebSocket (player → servidor → ponte).
+        if (ws?.readyState === 1) ws.send(JSON.stringify({ type: 'input:pong', id: msg.id }));
         break;
       case 'error':
         if (msg.code === 'invalid_host_key') {
@@ -303,8 +349,97 @@ export function createBridge({
     socket.addEventListener('close', onDown);
   }
 
+  function originAllowed(origin) {
+    // Navegadores sempre enviam Origin; programas locais (sem Origin) já têm
+    // acesso à máquina, então só a origem de um site precisa ser conferida.
+    if (!origin) return true;
+    return origins.has(origin);
+  }
+
+  function startLocal() {
+    if (localPort === null || localPort === undefined || localServer) return Promise.resolve(0);
+    const httpServer = http.createServer((_req, res) => {
+      res.writeHead(404, { 'Content-Type': 'text/plain' });
+      res.end('Ponte de controle local.');
+    });
+    const openSockets = new Set();
+    httpServer.on('connection', (socket) => {
+      openSockets.add(socket);
+      socket.on('close', () => openSockets.delete(socket));
+    });
+    const gate = new EventEmitter();
+    const wss = createWebSocketServer({ server: gate, path: '/local', maxPayload: 64 * 1024 });
+
+    httpServer.on('upgrade', (req, socket, head) => {
+      const hostName = String(req.headers.host ?? '').replace(/:\d+$/, '');
+      if (!LOCAL_HOSTS.has(hostName) || !originAllowed(req.headers.origin)) {
+        log(`Canal local recusou uma origem não autorizada (${req.headers.origin ?? 'sem origem'}).`);
+        socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
+        socket.destroy();
+        return;
+      }
+      gate.emit('upgrade', req, socket, head);
+    });
+
+    wss.on('connection', (client) => {
+      let authed = false;
+      const hello = setTimeout(() => { if (!authed) client.close(4401, 'hello'); }, 5000);
+      client.on('message', (raw) => {
+        let msg;
+        try {
+          msg = JSON.parse(raw.toString());
+        } catch {
+          return;
+        }
+        if (!authed) {
+          if (msg.type !== 'hello' || !safeEqual(String(msg.key ?? ''), key)) {
+            client.close(4401, 'chave');
+            return;
+          }
+          authed = true;
+          clearTimeout(hello);
+          if (localClient && localClient !== client) {
+            try { localClient.close(4001, 'outro_host'); } catch { /* ignore */ }
+          }
+          localClient = client;
+          log('Canal local conectado (comandos por P2P liberados).');
+          client.send(JSON.stringify({ type: 'hello', ok: true, sessionActive }));
+          return;
+        }
+        if (localClient !== client) return;
+        if (msg.type === 'input') handleInput(msg.payload, 'local');
+        else if (msg.type === 'ping') client.send(JSON.stringify({ type: 'pong', id: msg.id }));
+        else if (msg.type === 'release') release('canal P2P fechado');
+      });
+      client.on('close', () => {
+        clearTimeout(hello);
+        if (localClient === client) {
+          localClient = null;
+          log('Canal local desconectado.');
+          if (lastSource === 'local') release('canal local desconectado');
+        }
+      });
+    });
+
+    localServer = { httpServer, wss, openSockets };
+    return new Promise((resolve, reject) => {
+      httpServer.once('error', reject);
+      httpServer.listen(localPort, '127.0.0.1', () => {
+        const port = httpServer.address().port;
+        log(`Canal local em ws://127.0.0.1:${port}/local (origens: ${[...origins].join(', ') || 'nenhuma'}).`);
+        resolve(port);
+      });
+    });
+  }
+
   return {
     stats,
+
+    /** Sobe o canal local (no-op se desligado). Retorna a porta em uso. */
+    startLocal,
+    get localPort() {
+      return localServer?.httpServer.address()?.port ?? 0;
+    },
 
     start() {
       stopped = false;
@@ -324,6 +459,13 @@ export function createBridge({
 
     async stop() {
       stopped = true;
+      if (localServer) {
+        const { httpServer, wss, openSockets } = localServer;
+        localServer = null;
+        wss.close();
+        for (const socket of openSockets) socket.destroy();
+        await new Promise((resolve) => httpServer.close(resolve));
+      }
       clearTimeout(reconnectTimer);
       clearInterval(pingTimer);
       clearInterval(watchdogTimer);
@@ -350,6 +492,7 @@ function parseArgs(argv) {
     else if (a === '--url') args.url = argv[++i];
     else if (a === '--key') args.key = argv[++i];
     else if (a === '--python') args.python = argv[++i];
+    else if (a === '--local-port') args.localPort = Number(argv[++i]);
     else if (a === '--help' || a === '-h') args.help = true;
   }
   return args;
@@ -373,7 +516,7 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
 
   if (args.help) {
-    console.log('Uso: npm run bridge [-- --dry-run] [--url ws://host/ws] [--key CHAVE] [--python python]');
+    console.log('Uso: npm run bridge [-- --dry-run] [--url ws://host/ws] [--key CHAVE] [--python python] [--local-port 8765]');
     return;
   }
 
@@ -430,8 +573,28 @@ async function main() {
 
   log(`Controle: ${sink.name}. Botões suportados: ${ALL_BUTTONS.length} + 2 gatilhos + 2 analógicos.`);
 
-  bridge = createBridge({ url, key, sink, log, onFatal: () => shutdown(1) });
+  const envPort = process.env.BRIDGE_LOCAL_PORT;
+  const localPort = Number.isFinite(args.localPort)
+    ? args.localPort
+    : envPort !== undefined && envPort !== '' ? Number(envPort) : DEFAULT_LOCAL_PORT;
+  const allowedOrigins = String(process.env.BRIDGE_ALLOWED_ORIGINS ?? '')
+    .split(',').map((v) => v.trim()).filter(Boolean);
+
+  bridge = createBridge({
+    url,
+    key,
+    sink,
+    log,
+    onFatal: () => shutdown(1),
+    localPort: localPort > 0 ? localPort : null, // 0 desliga o canal local
+    allowedOrigins,
+  });
   bridge.start();
+  try {
+    await bridge.startLocal();
+  } catch (err) {
+    log(`Canal local indisponível (${err.message}). Os comandos seguirão pelo WebSocket.`);
+  }
 
   process.on('SIGINT', () => shutdown(0));
   process.on('SIGTERM', () => shutdown(0));

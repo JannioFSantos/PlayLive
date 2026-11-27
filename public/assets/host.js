@@ -26,6 +26,16 @@ let meterRaf = 0;
 let statsTimer = null;
 let lastStats = null;
 
+// Comandos por P2P: player ──DataChannel──> este host ──ws://127.0.0.1──> ponte.
+const params = new URLSearchParams(location.search);
+const LOCAL_PORT = Number(params.get('bridgePort') || localStorage.getItem('pl_bridge_port') || 8765);
+let local = null;
+let localReady = false;
+let localTimer = null;
+let inputDC = null;
+let lastInputSeq = -1;
+const inputStats = { p2p: 0, dropped: 0 };
+
 /* ------------------------------------------------------------------ */
 /* Boot                                                               */
 /* ------------------------------------------------------------------ */
@@ -118,6 +128,7 @@ function connect(hostKey) {
       if (msg.state?.serverNow) setServerNow(msg.state.serverNow);
       applySession(msg.session);
       log('Conectado ao servidor como host.');
+      connectLocal();
       loadDevices(false);
       updateUI();
     },
@@ -229,6 +240,105 @@ async function handleMessage(msg) {
 
     default:
       break;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Comandos por P2P (DataChannel) → ponte local                       */
+/* ------------------------------------------------------------------ */
+
+function setLocalBadge(ready) {
+  $('localDot').className = `dot ${ready ? 'live' : 'off'}`;
+  $('localText').textContent = ready ? 'ponte local: online' : 'ponte local: offline';
+}
+
+function sendLocal(message) {
+  if (local?.readyState === WebSocket.OPEN) local.send(JSON.stringify(message));
+}
+
+function sendInputChannel(message) {
+  if (inputDC?.readyState === 'open') {
+    try {
+      inputDC.send(JSON.stringify(message));
+    } catch {
+      /* canal fechando */
+    }
+  }
+}
+
+/** Diz ao player se os comandos P2P têm para onde ir (ponte local conectada). */
+function announceRoute() {
+  sendInputChannel({ k: 'route', ok: localReady });
+}
+
+function connectLocal() {
+  clearTimeout(localTimer);
+  if (!key) return;
+  if (local && local.readyState <= WebSocket.OPEN) return;
+
+  let socket;
+  try {
+    socket = new WebSocket(`ws://127.0.0.1:${LOCAL_PORT}/local`);
+  } catch {
+    localTimer = setTimeout(connectLocal, 5000);
+    return;
+  }
+  local = socket;
+
+  socket.onopen = () => socket.send(JSON.stringify({ type: 'hello', key }));
+  socket.onmessage = (event) => {
+    let msg;
+    try {
+      msg = JSON.parse(event.data);
+    } catch {
+      return;
+    }
+    if (msg.type === 'hello' && msg.ok) {
+      localReady = true;
+      setLocalBadge(true);
+      log('Ponte de controle local conectada: comandos por P2P liberados.');
+      announceRoute();
+    } else if (msg.type === 'pong') {
+      sendInputChannel({ k: 'pong', id: msg.id });
+    }
+  };
+  const down = () => {
+    if (local !== socket) return;
+    const was = localReady;
+    localReady = false;
+    local = null;
+    setLocalBadge(false);
+    if (was) {
+      log('Ponte de controle local desconectada. Comandos voltam pelo WebSocket.', 'warn');
+      announceRoute();
+    }
+    localTimer = setTimeout(connectLocal, 3000);
+  };
+  socket.onclose = down;
+  socket.onerror = () => {};
+}
+
+function onInputChannelMessage(raw) {
+  let msg;
+  try {
+    msg = JSON.parse(raw);
+  } catch {
+    return;
+  }
+
+  if (msg.k === 'i') {
+    // Canal não ordenado: descarta pacotes mais velhos que o último aplicado.
+    if (!Number.isFinite(msg.s) || msg.s <= lastInputSeq) return;
+    lastInputSeq = msg.s;
+    if (!localReady) {
+      inputStats.dropped++;
+      return;
+    }
+    inputStats.p2p++;
+    sendLocal({ type: 'input', payload: msg.p });
+  } else if (msg.k === 'ping') {
+    if (localReady) sendLocal({ type: 'ping', id: msg.id });
+    else announceRoute();
   }
 }
 
@@ -488,6 +598,20 @@ async function publish() {
 
   pc = new RTCPeerConnection({ iceServers });
 
+  // Canal de comandos: não ordenado e sem reenvio (comportamento de UDP).
+  // Um estado antigo de botão não vale a pena ser reenviado.
+  inputDC = pc.createDataChannel('input', { ordered: false, maxRetransmits: 0 });
+  inputDC.onopen = () => {
+    lastInputSeq = -1;
+    log('Canal de comandos P2P aberto.');
+    announceRoute();
+  };
+  inputDC.onclose = () => {
+    log('Canal de comandos P2P fechado.', 'warn');
+    sendLocal({ type: 'release' });
+  };
+  inputDC.onmessage = (event) => onInputChannelMessage(event.data);
+
   pc.onicecandidate = (event) => {
     if (event.candidate) ws?.send({ type: 'candidate', payload: event.candidate });
   };
@@ -543,6 +667,16 @@ async function tuneSender(sender, isVideo) {
 function closePeer() {
   stopStats();
   publishing = false;
+  if (inputDC) {
+    inputDC.onclose = null;
+    sendLocal({ type: 'release' });
+    try {
+      inputDC.close();
+    } catch {
+      /* ignore */
+    }
+    inputDC = null;
+  }
   try {
     pc?.close();
   } catch {

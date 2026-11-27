@@ -31,6 +31,18 @@ let warned = new Set();
 let lastInputKey = '';
 let lastInputAt = 0;
 let uiHideTimer = null;
+// Comandos: DataChannel P2P (preferido) com WebSocket como reserva.
+// `?input=ws` força o WebSocket, para comparar a latência dos dois caminhos.
+const forcedRoute = params.get('input');
+let inputDC = null;
+let dcRouteOk = true;
+let dcSeq = 0;
+let lastP2pPongAt = 0;
+let currentRoute = 'ws';
+let lastPayload = null;
+let probeId = 0;
+const probePending = new Map();
+const rtts = { p: [], w: [] };
 const touchAxes = [0, 0, 0, 0];
 const touchButtons = new Set();
 const touchPointers = new Map();
@@ -224,6 +236,10 @@ async function handleMessage(msg) {
       showEnded(msg.reason || 'time_up');
       break;
 
+    case 'input:pong':
+      recordProbe('w', msg.id);
+      break;
+
     case 'error':
       if (msg.code === 'session_ended') showEnded('time_up');
       else if (msg.code === 'invalid_token') fatal('Sessão inválida', msg.message);
@@ -248,6 +264,10 @@ async function handleOffer(offer) {
 
     pc.onicecandidate = (event) => {
       if (event.candidate) ws?.send({ type: 'candidate', payload: event.candidate });
+    };
+
+    pc.ondatachannel = (event) => {
+      if (event.channel.label === 'input') attachInputChannel(event.channel);
     };
 
     pc.ontrack = (event) => {
@@ -287,6 +307,10 @@ async function handleOffer(offer) {
 
 function closePeer() {
   stopStats();
+  inputDC = null;
+  dcRouteOk = true;
+  lastP2pPongAt = 0;
+  updateRouteLabel();
   try {
     pc?.close();
   } catch {
@@ -639,15 +663,158 @@ function touchPayload() {
   };
 }
 
+function p2pUsable() {
+  return inputDC?.readyState === 'open'
+    && dcRouteOk
+    && performance.now() - lastP2pPongAt < 3000;
+}
+
+function chooseRoute() {
+  if (forcedRoute === 'ws') return 'ws';
+  return p2pUsable() ? 'p2p' : 'ws';
+}
+
+function updateRouteLabel() {
+  const el = $('stRoute');
+  if (!el) return;
+  const route = chooseRoute();
+  el.textContent = route === 'p2p'
+    ? 'P2P (DataChannel)'
+    : forcedRoute === 'ws' ? 'WebSocket (forçado)' : 'WebSocket (reserva)';
+}
+
+function transmit(payload, route) {
+  if (route === 'p2p') {
+    if (inputDC.bufferedAmount > 8192) return false;
+    try {
+      inputDC.send(JSON.stringify({ k: 'i', s: ++dcSeq, p: payload }));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  if (!ws?.ready) return false;
+  ws.send({ type: 'input', payload });
+  return true;
+}
+
 function sendInput(payload) {
-  if (ended || !ws?.ready) return;
+  if (ended) return;
+  const route = chooseRoute();
+  if (route !== currentRoute) {
+    currentRoute = route;
+    lastInputKey = ''; // ao trocar de caminho, reenvia o estado atual na hora
+    updateRouteLabel();
+  }
+
   const key = JSON.stringify(payload.axes) + JSON.stringify(payload.buttons);
   const nowTs = Date.now();
-  if (key === lastInputKey && nowTs - lastInputAt < 1000) return;
+  // P2P não tem reenvio: repete o estado a cada 100 ms. WebSocket (TCP) basta a cada 1 s.
+  const refreshMs = route === 'p2p' ? 100 : 1000;
+  if (key === lastInputKey && nowTs - lastInputAt < refreshMs) return;
+
+  if (!transmit(payload, route)) return;
+  const changed = key !== lastInputKey;
   lastInputKey = key;
   lastInputAt = nowTs;
-  ws.send({ type: 'input', payload });
+  lastPayload = payload;
+
+  // Redundância: um pacote perdido (principalmente o de "soltar botão") é
+  // coberto por duas cópias logo em seguida. O host descarta duplicatas antigas.
+  if (route === 'p2p' && changed) {
+    for (const delay of [30, 70]) {
+      setTimeout(() => {
+        if (!ended && lastPayload === payload && chooseRoute() === 'p2p') transmit(payload, 'p2p');
+      }, delay);
+    }
+  }
 }
+
+/* Canal de comandos P2P e medição de latência dos dois caminhos ----- */
+
+function attachInputChannel(channel) {
+  inputDC = channel;
+  dcRouteOk = true;
+  dcSeq = 0;
+  const onOpen = () => {
+    sendProbes();
+    updateRouteLabel();
+  };
+  channel.onopen = onOpen;
+  channel.onclose = () => {
+    if (inputDC === channel) inputDC = null;
+    lastInputKey = '';
+    updateRouteLabel();
+  };
+  channel.onmessage = (event) => {
+    let msg;
+    try {
+      msg = JSON.parse(event.data);
+    } catch {
+      return;
+    }
+    if (msg.k === 'route') {
+      dcRouteOk = Boolean(msg.ok);
+      updateRouteLabel();
+    } else if (msg.k === 'pong') {
+      dcRouteOk = true;
+      recordProbe('p', msg.id);
+    }
+  };
+  if (channel.readyState === 'open') onOpen();
+}
+
+function sendProbes() {
+  if (ended) return;
+  const t = performance.now();
+  if (inputDC?.readyState === 'open') {
+    const id = ++probeId;
+    probePending.set(`p${id}`, t);
+    try {
+      inputDC.send(JSON.stringify({ k: 'ping', id }));
+    } catch {
+      /* canal fechando */
+    }
+  }
+  if (ws?.ready) {
+    const id = ++probeId;
+    probePending.set(`w${id}`, t);
+    ws.send({ type: 'input:ping', id });
+  }
+  for (const [probeKey, started] of probePending) {
+    if (t - started > 5000) probePending.delete(probeKey);
+  }
+  updateRouteLabel();
+}
+
+function recordProbe(kind, id) {
+  const probeKey = `${kind}${id}`;
+  const started = probePending.get(probeKey);
+  if (started === undefined) return;
+  probePending.delete(probeKey);
+  const rtt = performance.now() - started;
+  const list = rtts[kind];
+  list.push(rtt);
+  if (list.length > 30) list.shift();
+  if (kind === 'p') lastP2pPongAt = performance.now();
+  renderInputStats();
+}
+
+function describeRtts(list) {
+  if (!list.length) return '—';
+  const sorted = [...list].sort((a, b) => a - b);
+  const median = sorted[Math.floor(sorted.length / 2)];
+  return `${list.at(-1).toFixed(0)} ms (mediana ${median.toFixed(0)}, ${list.length} amostras)`;
+}
+
+function renderInputStats() {
+  if (!$('stInP2p')) return;
+  $('stInP2p').textContent = describeRtts(rtts.p);
+  $('stInWs').textContent = describeRtts(rtts.w);
+  updateRouteLabel();
+}
+
+setInterval(sendProbes, 1000);
 
 function releaseTouchControls() {
   for (const [pointerId, stick] of stickPointers) {
@@ -817,7 +984,7 @@ function setupGamepad() {
     };
 
     sendInput(payload);
-  }, 50);
+  }, 16);
 }
 
 /* ------------------------------------------------------------------ */

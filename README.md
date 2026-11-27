@@ -17,7 +17,8 @@ YouTube live --vídeo--> página inicial (/) <--apelido-- Espectadores
               ┌───────────┴───────────┐
               ▼                       ▼
         Jogador (/play) <── vídeo WebRTC (P2P) ── PC do jogo (/host)
-        controle no navegador ── WebSocket ──> ponte ──> controle virtual
+        controle no navegador ── comandos: DataChannel P2P ──> /host ──> ponte ──> controle virtual
+                              (reserva: WebSocket via servidor ──────────> ponte)
 ```
 
 - **Página inicial (`/`)**: mostra a live, a fila e o chat próprio. Só quem entrou na fila pode ler e enviar mensagens; o apelido da fila identifica a pessoa.
@@ -104,14 +105,35 @@ Uma placa de captura só atende **um programa por vez**. Se o OBS (que transmite
 | `BRIDGE_URL` | `ws://localhost:PORT/ws` | URL WebSocket do servidor para a ponte de controle. |
 | `BRIDGE_PYTHON` | automático | Executável Python usado pela ponte (`python` no Windows, `python3` nos demais). |
 | `BRIDGE_DRY_RUN` | `0` | `1` testa a ponte sem criar um controle virtual. |
+| `BRIDGE_LOCAL_PORT` | `8765` | Porta do canal local entre o `/host` e a ponte (só `127.0.0.1`). `0` desliga os comandos por P2P. |
+| `BRIDGE_ALLOWED_ORIGINS` | derivada | Origens extras aceitas no canal local, separadas por vírgula. Por padrão só o site de `BRIDGE_URL`. |
 
 Copie `.env.example` para `.env` e ajuste as opções necessárias. Para a ponte em um PC separado, use `BRIDGE_URL` (ex.: `wss://SEU-DOMINIO/ws`) e a mesma `HOST_KEY` do servidor. Não versione `.env` nem a pasta `data/`.
 
 ## Ponte de controle (Windows)
 
 ```
-Controle do jogador ──> navegador (/play) ──WebSocket──> servidor ──> ponte ──> controle Xbox 360 virtual ──> jogo
+Preferido (P2P):  navegador (/play) ──DataChannel──> /host ──ws://127.0.0.1──> ponte ──> controle Xbox 360 virtual ──> jogo
+Reserva:          navegador (/play) ──WebSocket──> servidor ──────────────────> ponte
 ```
+
+### Comandos por WebRTC (como o Xbox Cloud Gaming) e reserva por WebSocket
+
+- O host abre um **DataChannel** `input` com o jogador, configurado como **não ordenado e sem reenvio** (comportamento de UDP): um estado antigo de botão não vale a pena ser reenviado. Os pacotes têm número de sequência, e o host descarta os que chegam fora de ordem.
+- O estado do controle é reenviado a cada 100 ms e, a cada mudança, duas cópias extras seguem em 30 ms e 70 ms. Assim um pacote perdido (principalmente o de *soltar o botão*) é coberto.
+- O host repassa os comandos para a ponte por um canal local (`ws://127.0.0.1:8765/local`). Por isso **o `/host` e a ponte precisam estar no mesmo PC**. O `/host` mostra *ponte local: online* quando a ligação existe.
+- O **servidor continua mandando na sessão**: a ponte só aplica comandos enquanto o servidor informa sessão **ativa**, mesmo quando eles chegam pelo canal local. Ao terminar o tempo, ao fechar o canal ou ao perder o host, todos os botões são soltos.
+- **Reserva automática:** o player testa os dois caminhos a cada segundo. Se o P2P cair, não responder por 3 s ou a ponte local não estiver conectada, os comandos voltam sozinhos para o WebSocket e retornam ao P2P quando ele se recuperar.
+- **Segurança do canal local:** só escuta em `127.0.0.1`; recusa conexões de qualquer site que não seja o seu (confere `Origin`) e pedidos com `Host` estranho (DNS rebinding); exige a chave do host na primeira mensagem.
+- O servidor também limita a 240 comandos por segundo por conexão no caminho WebSocket.
+- Observação: páginas HTTPS conectando em `ws://127.0.0.1` são permitidas pelos navegadores baseados em Chromium, mas versões recentes do Chrome podem pedir uma **permissão de acesso à rede local** na primeira vez no `/host`: permita. Safari não é suportado no `/host`.
+
+### Medindo a diferença entre P2P e WebSocket
+
+No `/play`, abra **stats**. As linhas *comandos P2P* e *comandos WS* mostram o tempo de ida e volta até a ponte, em cada caminho (último valor, mediana e número de amostras), e *comandos via* indica qual caminho está em uso.
+
+- Para comparar, jogue um tempo normalmente e depois abra o player com `?input=ws` (força o WebSocket) para ver o outro caminho em uso real.
+- A sonda mede o trajeto jogador → ponte → jogador de cada caminho (inclui o servidor no WebSocket e o `/host` no P2P). Ela **não** mede o atraso do vídeo nem do jogo.
 
 1. No PC do jogo, instale **Node 22+** e **Python 3** (marque *Add python.exe to PATH*).
 2. Instale o driver **ViGEmBus** ([releases](https://github.com/nefarius/ViGEmBus/releases)) e reinicie o Windows se pedir. O `start-bridge.bat` instala só a biblioteca Python `vgamepad`; o driver precisa estar instalado antes.
@@ -191,6 +213,7 @@ Sem Docker: `node --env-file-if-exists=.env src/server.js` atrás de um proxy co
 | Jogador fica em "preparando" e a sessão cancela | Clique em **Iniciar captura** no `/host` (captura de janela exige clique); aumente `PROVISION_TIMEOUT_SEC`. |
 | Sem vídeo para o jogador | Configure TURN (`TURN_URL`, usuário, senha); confira portas do TURN. |
 | Jogo não reconhece o controle | Inicie a ponte **antes** do jogo; confira o ViGEmBus; teste com `npm run bridge:dry`. |
+| Comandos sempre por "WebSocket (reserva)" | `/host` mostra *ponte local: offline*? Rode a ponte no **mesmo PC** do `/host`, confira `BRIDGE_LOCAL_PORT` e se o navegador liberou o acesso à rede local. Sem TURN, o P2P também pode falhar atrás de CGNAT. |
 | Não consigo participar do chat | Entre na fila da página inicial; se o chat estiver pausado, peça ao host para reabri-lo no `/admin`. |
 | O player do YouTube não aparece | Confira se a live está aberta e se a incorporação está permitida. |
 | `/host` não lista a placa | A placa precisa ser UVC; outro programa (OBS) pode estar usando-a. |

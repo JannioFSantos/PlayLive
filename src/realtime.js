@@ -26,7 +26,9 @@ import { isAdminRequest } from './security.js';
  *    {type:'candidate', payload}   ambos
  *    {type:'stream:ready'}         host
  *    {type:'stream:stats', payload} host → admin
- *    {type:'input', payload}       viewer → bridge
+ *    {type:'input', payload}       viewer → bridge (reserva; o caminho preferido é P2P)
+ *    {type:'input:ping', id}       viewer → bridge (sonda de latência do WebSocket)
+ *    {type:'input:pong', id}       bridge → viewer
  *
  *  servidor → cliente
  *    {type:'hello'|'state'|'session:started'|'session:warning'|'session:ended'
@@ -179,6 +181,18 @@ export function attachRealtime(server) {
       presence.admins.delete(ws);
     });
 
+    // Limite de comandos por conexão (um cliente malicioso não inunda a ponte).
+    const inputWindow = { start: 0, count: 0 };
+    function inputAllowed(client) {
+      const t = now();
+      if (t - inputWindow.start >= 1000) {
+        inputWindow.start = t;
+        inputWindow.count = 0;
+      }
+      inputWindow.count += 1;
+      return inputWindow.count <= 240;
+    }
+
     function handle(client, msg) {
       if (msg.type === 'hello') {
         clearTimeout(helloTimer);
@@ -211,9 +225,18 @@ export function attachRealtime(server) {
           return;
 
         case 'input':
-          if (role !== 'viewer') return;
+          if (role !== 'viewer' || !inputAllowed(client)) return;
           if (presence.bridge) send(presence.bridge, { type: 'input', payload: msg.payload });
           return;
+
+        case 'input:ping':
+          if (role !== 'viewer' || !inputAllowed(client)) return;
+          if (presence.bridge) send(presence.bridge, { type: 'input:ping', id: msg.id });
+          return;
+
+        case 'input:pong':
+          if (role !== 'bridge') return;
+          return relayToViewer({ type: 'input:pong', id: msg.id });
 
         case 'stream:ready': {
           if (role !== 'host') return;
