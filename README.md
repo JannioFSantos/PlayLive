@@ -159,7 +159,7 @@ Detalhes: os comandos só valem **durante a sessão ativa**; ao encerrar, perder
 ```bash
 cp .env.example .env
 # edite: DOMAIN=live.seudominio.com, ADMIN_PASSWORD, HOST_KEY
-docker compose up -d --build
+docker compose --profile caddy up -d --build
 docker compose logs -f app      # mostra a senha do painel e a chave do host, se você não definiu
 ```
 
@@ -172,7 +172,7 @@ Com TURN (jogadores atrás de CGNAT):
 
 ```bash
 # no .env: TURN_URL=turn:SEU-DOMINIO:3478, TURN_USERNAME=..., TURN_CREDENTIAL=...
-docker compose --profile turn up -d --build
+docker compose --profile caddy --profile turn up -d --build
 ```
 
 Libere também `3478/tcp`, `3478/udp` e `49160–49200/udp` no firewall.
@@ -180,6 +180,7 @@ Libere também `3478/tcp`, `3478/udp` e `49160–49200/udp` no firewall.
 ### Coolify
 
 `docker-compose.coolify.yml` sobe só o servidor; domínio, HTTPS e WebSocket ficam com o proxy do Coolify.
+O `docker-compose.yml` principal também funciona no Coolify sem ativar o perfil `caddy`; nesse caso, o domínio é roteado pelo proxy do Coolify.
 
 1. **New Resource → repositório** → **Build Pack: Docker Compose** → **Docker Compose Location: `/docker-compose.coolify.yml`**.
 2. Configure o **domínio** do serviço `app` (porta interna `8080`) e aponte o DNS para a VPS.

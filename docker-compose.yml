@@ -1,9 +1,10 @@
-# Play Live — servidor + HTTPS (Caddy) + TURN opcional
+# Play Live — servidor; HTTPS (Caddy) e TURN opcionais
 #
-#   docker compose up -d --build                 # servidor + HTTPS
-#   docker compose --profile turn up -d --build  # + servidor TURN (coturn)
+#   docker compose --profile caddy up -d --build                    # servidor + HTTPS
+#   docker compose --profile caddy --profile turn up -d --build    # + TURN (coturn)
 #
-# Pré-requisitos: copie .env.example para .env e preencha DOMAIN (e o resto).
+# No Coolify, o proxy fornece HTTPS; use só o serviço app (perfil caddy desligado).
+# Para hospedagem própria, copie .env.example para .env e preencha DOMAIN.
 # O domínio precisa apontar para este servidor e as portas 80/443 precisam
 # estar liberadas para o Caddy emitir o certificado.
 #
@@ -21,21 +22,24 @@ services:
     environment:
       PORT: "8080"
       DATA_DIR: /data
-      TRUST_PROXY: "1" # atrás do Caddy
-      BASE_URL: https://${DOMAIN:?defina DOMAIN no .env}
+      TRUST_PROXY: "1"
+      BASE_URL: ${BASE_URL:-https://${DOMAIN:-test.sistema.v6.rocks}}
+      MULTIPLAYER: ${MULTIPLAYER:-1}
+      MAX_REMOTE_PLAYERS: ${MAX_REMOTE_PLAYERS:-2}
     volumes:
       - app-data:/data
     expose:
       - "8080"
 
   caddy:
+    profiles: ["caddy"]
     image: caddy:2-alpine
     restart: unless-stopped
     depends_on:
       app:
         condition: service_healthy
     environment:
-      DOMAIN: ${DOMAIN:?defina DOMAIN no .env}
+      DOMAIN: ${DOMAIN:-test.sistema.v6.rocks}
     ports:
       - "80:80"
       - "443:443"
