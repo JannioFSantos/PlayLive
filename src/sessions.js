@@ -31,6 +31,11 @@ export function remainingMs(session, t = now()) {
 
 export function publicSession(session, t = now()) {
   if (!session) return null;
+  const players = (session.players ?? []).map((player) => ({
+    slot: player.slot,
+    name: player.name,
+    connected: Boolean(player.viewer?.connected),
+  }));
   return {
     status: session.status,
     streamReady: Boolean(session.streamReady),
@@ -40,6 +45,7 @@ export function publicSession(session, t = now()) {
     minutes: Math.round(session.durationMs / 60_000),
     failedProvision: session.status === 'provisioning'
       && t - session.createdAt > config.provisionTimeoutSec * 1000,
+    ...(config.multiplayer ? { players, playerCount: players.length } : {}),
   };
 }
 
@@ -60,20 +66,35 @@ export function publicStatus(t = now(), state = store.data) {
 export function sessionView(tokenValue) {
   const t = now();
   const session = store.data.session;
-  if (!session || session.token !== tokenValue) {
+  if (!session) {
     throw new ApiError(401, 'invalid_token', 'Link de sessão inválido ou expirado.');
   }
+  const player = (session.players ?? []).find((item) => item.token === tokenValue);
+  const legacy = session.token === tokenValue;
+  if (!player && (!legacy || (config.multiplayer && Array.isArray(session.players)))) {
+    throw new ApiError(401, 'invalid_token', 'Link de sessão inválido ou expirado.');
+  }
+  const slot = player?.slot ?? 1;
+  const name = player?.name ?? session.customer?.name;
   return {
     serverNow: t,
     id: session.id,
     status: session.status,
-    customer: { name: session.customer.name },
+    customer: { name },
+    playerSlot: slot,
+    ...(config.multiplayer ? {
+      players: (session.players ?? []).map((item) => ({
+        slot: item.slot,
+        name: item.name,
+        connected: Boolean(item.viewer?.connected),
+      })),
+    } : {}),
     startedAt: session.startedAt,
     endsAt: session.endsAt,
     remainingMs: remainingMs(session, t),
     minutes: Math.round(session.durationMs / 60_000),
     streamReady: Boolean(session.streamReady),
-    playerUrl: `${config.baseUrl}/play.html?s=${encodeURIComponent(session.token)}`,
+    playerUrl: `${config.baseUrl}/play.html?s=${encodeURIComponent(tokenValue)}`,
     warnings: session.warningsSent,
     endedReason: session.endedReason,
   };
@@ -87,9 +108,10 @@ export function startGuestSession({ nick, minutes, viewerId }) {
   const t = now();
   return store.mutate((state) => {
     if (activeSession(state)) return null;
+    const token = id('tok_') + id('');
     const session = {
       id: id('ses_'),
-      token: id('tok_') + id(''),
+      token,
       createdAt: t,
       startedAt: null,
       endsAt: null,
@@ -100,6 +122,13 @@ export function startGuestSession({ nick, minutes, viewerId }) {
       warningsSent: [],
       streamReady: false,
       viewer: { connected: false, lastSeenAt: null, connections: 0 },
+      players: [{
+        slot: 1,
+        viewerId,
+        name: nick,
+        token,
+        viewer: { connected: false, lastSeenAt: null, connections: 0 },
+      }],
       endedAt: null,
       endedReason: null,
     };
@@ -109,6 +138,84 @@ export function startGuestSession({ nick, minutes, viewerId }) {
     bus.emit('session:created', { session });
     return session;
   });
+}
+
+/** Adiciona um segundo espectador remoto à sessão ativa em modo multiplayer. */
+export function addGuestPlayer({ nick, minutes, viewerId }) {
+  if (!config.multiplayer || config.maxRemotePlayers < 2) return null;
+  return store.mutate((state) => {
+    const session = state.session;
+    if (!session || !ACTIVE_STATUSES.includes(session.status)) return null;
+    if (!Array.isArray(session.players)) {
+      session.players = [{
+        slot: 1,
+        viewerId: session.guestViewerId,
+        name: session.customer.name,
+        token: session.token,
+        viewer: session.viewer ?? { connected: false, lastSeenAt: null, connections: 0 },
+      }];
+    }
+    if (session.players?.length >= config.maxRemotePlayers) return null;
+    if (session.players?.some((player) => player.viewerId === viewerId)) return null;
+
+    const token = id('tok_') + id('');
+    const player = {
+      slot: 2,
+      viewerId,
+      name: nick,
+      token,
+      viewer: { connected: false, lastSeenAt: null, connections: 0 },
+    };
+    session.players = [...(session.players ?? []), player];
+    session.customer = { name: `${session.customer.name} + ${nick}` };
+    pushEvent(state, 'session.player_added', {
+      sessionID: session.id,
+      nick,
+      minutes,
+      slot: player.slot,
+    });
+    bus.emit('session:player_added', { session, player });
+    return { session, player };
+  });
+}
+
+/** Remove um jogador sem encerrar os demais na mesma sessão multiplayer. */
+export function forfeitGuestPlayer(tokenValue) {
+  if (!config.multiplayer) return null;
+  const t = now();
+  const result = store.mutate((state) => {
+    const session = state.session;
+    if (!session || !ACTIVE_STATUSES.includes(session.status)) return null;
+    const index = (session.players ?? []).findIndex((player) => player.token === tokenValue);
+    if (index < 0) return null;
+    const [player] = session.players.splice(index, 1);
+    player.viewer.connected = false;
+    if (session.players.length === 0) {
+      session.status = 'forfeited';
+      session.endedReason = 'forfeited';
+      session.endedAt = t;
+      session.streamReady = false;
+      if (session.startedAt) state.counters.minutesPlayed += Math.round((t - session.startedAt) / 60_000);
+      pushEvent(state, 'session.ended', { sessionID: session.id, reason: 'forfeited', by: 'player' }, 'warn');
+      return { session, player, ended: true };
+    }
+
+    session.customer = { name: session.players.map((item) => item.name).join(' + ') };
+    pushEvent(state, 'session.player_forfeited', {
+      sessionID: session.id,
+      nick: player.name,
+      slot: player.slot,
+    }, 'warn');
+    return { session, player, ended: false };
+  });
+
+  if (!result) return null;
+  if (result.ended) {
+    bus.emit('session:ended', { session: result.session, reason: 'forfeited' });
+  } else {
+    bus.emit('session:player_ended', { session: result.session, player: result.player });
+  }
+  return result;
 }
 
 /** Host avisou que a captura está publicando. Aqui o relógio começa. */

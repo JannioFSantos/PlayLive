@@ -128,7 +128,10 @@ export function vigemSink({ python, log = console.log, onExit = () => {} }) {
               continue;
             }
             if (msg.ready) settle(resolve);
-            if (msg.error) settle(reject, new Error(msg.error));
+            if (msg.error) {
+              if (!settled) settle(reject, new Error(msg.error));
+              else log(`[vpad] ${msg.error}`);
+            }
           }
         });
 
@@ -209,8 +212,8 @@ export function createBridge({
   let watchdogTimer = null;
 
   let sessionActive = false;
-  let applied = neutralState();
-  let lastInputAt = 0;
+  const appliedBySlot = new Map([[1, neutralState()]]);
+  const lastInputBySlot = new Map();
   const stats = { inputs: 0, applied: 0, ignored: 0, releases: 0, localInputs: 0, wsInputs: 0 };
 
   // Canal local: o /host (navegador) entrega aqui os comandos recebidos por P2P.
@@ -220,9 +223,11 @@ export function createBridge({
   const origins = new Set([originFromServerUrl(url), ...allowedOrigins].filter(Boolean));
 
   function safeApply(state) {
+    const slot = Number(state?.playerSlot ?? 1);
     try {
-      sink.apply(state);
-      applied = state;
+      const tagged = { ...state, playerSlot: slot };
+      sink.apply(tagged);
+      appliedBySlot.set(slot, tagged);
       stats.applied++;
     } catch (err) {
       log(`Erro ao aplicar o controle: ${err.message}`);
@@ -230,10 +235,20 @@ export function createBridge({
   }
 
   function release(reason) {
-    if (isNeutral(applied)) return;
+    for (const [slot, state] of appliedBySlot) {
+      if (isNeutral(state)) continue;
+      stats.releases++;
+      log(`Soltando todos os botões do slot ${slot} (${reason}).`);
+      safeApply({ ...neutralState(), playerSlot: slot });
+    }
+  }
+
+  function releaseSlot(slot, reason) {
+    const state = appliedBySlot.get(slot) ?? neutralState();
+    if (isNeutral(state)) return;
     stats.releases++;
-    log(`Soltando todos os botões (${reason}).`);
-    safeApply(neutralState());
+    log(`Soltando todos os botões do slot ${slot} (${reason}).`);
+    safeApply({ ...neutralState(), playerSlot: slot });
   }
 
   function updateSession(state) {
@@ -264,8 +279,10 @@ export function createBridge({
       stats.ignored++;
       return;
     }
-    lastInputAt = Date.now();
-    if (!sameState(mapped, applied)) safeApply(mapped);
+    const slot = Math.max(1, Math.min(2, Number(payload?.playerSlot ?? 1)));
+    lastInputBySlot.set(slot, Date.now());
+    const tagged = { ...mapped, playerSlot: slot };
+    if (!sameState(tagged, appliedBySlot.get(slot))) safeApply(tagged);
   }
 
   function handleMessage(raw) {
@@ -292,7 +309,13 @@ export function createBridge({
         break;
       case 'input:ping':
         // Sonda de latência do caminho WebSocket (player → servidor → ponte).
-        if (ws?.readyState === 1) ws.send(JSON.stringify({ type: 'input:pong', id: msg.id }));
+        if (ws?.readyState === 1) {
+          ws.send(JSON.stringify({
+            type: 'input:pong',
+            id: msg.id,
+            playerSlot: Number(msg.playerSlot ?? 1),
+          }));
+        }
         break;
       case 'error':
         if (msg.code === 'invalid_host_key') {
@@ -408,8 +431,16 @@ export function createBridge({
         }
         if (localClient !== client) return;
         if (msg.type === 'input') handleInput(msg.payload, 'local');
-        else if (msg.type === 'ping') client.send(JSON.stringify({ type: 'pong', id: msg.id }));
-        else if (msg.type === 'release') release('canal P2P fechado');
+        else if (msg.type === 'ping') {
+          client.send(JSON.stringify({
+            type: 'pong',
+            id: msg.id,
+            playerSlot: Number(msg.playerSlot ?? 1),
+          }));
+        }
+        else if (msg.type === 'release') {
+          releaseSlot(Number(msg.playerSlot ?? 1), 'canal P2P fechado');
+        }
       });
       client.on('close', () => {
         clearTimeout(hello);
@@ -451,8 +482,13 @@ export function createBridge({
       }, PING_MS);
 
       watchdogTimer = setInterval(() => {
-        if (!isNeutral(applied) && Date.now() - lastInputAt > watchdogMs) {
-          release('sem sinal do cliente');
+        for (const [slot, state] of appliedBySlot) {
+          const lastInputAt = lastInputBySlot.get(slot) ?? 0;
+          if (!isNeutral(state) && lastInputAt > 0 && Date.now() - lastInputAt > watchdogMs) {
+            stats.releases++;
+            log(`Soltando todos os botões do slot ${slot} (sem sinal do cliente).`);
+            safeApply({ ...neutralState(), playerSlot: slot });
+          }
         }
       }, 500);
     },

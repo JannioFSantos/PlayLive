@@ -49,6 +49,8 @@ export const config = {
   // (desenvolvimento); REQUIRE_BRIDGE=0 exige só o host (placa de captura).
   requireOnline: env('REQUIRE_ONLINE', '1') !== '0',
   requireBridge: env('REQUIRE_BRIDGE', '1') !== '0',
+  multiplayer: env('MULTIPLAYER', '0') === '1',
+  maxRemotePlayers: Math.max(1, Math.min(2, Math.trunc(num('MAX_REMOTE_PLAYERS', 2)))),
 
   xboxPowerOnCmd: env('XBOX_POWER_ON_CMD'),
   xboxPowerOffCmd: env('XBOX_POWER_OFF_CMD'),

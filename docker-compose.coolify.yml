@@ -15,7 +15,7 @@ services:
     build: .
     restart: unless-stopped
     environment:
-      BASE_URL: ${BASE_URL:-https://playlive.v6.rocks}
+      BASE_URL: ${BASE_URL:-https://test.sistema.v6.rocks}
       PORT: "8080"
       DATA_DIR: /data
       TRUST_PROXY: "1" # atrás do proxy do Coolify
@@ -28,6 +28,8 @@ services:
       MAX_MINUTES: ${MAX_MINUTES:-60}
       DEFAULT_MINUTES: ${DEFAULT_MINUTES:-10}
       PROVISION_TIMEOUT_SEC: ${PROVISION_TIMEOUT_SEC:-180}
+      MULTIPLAYER: ${MULTIPLAYER:-1}
+      MAX_REMOTE_PLAYERS: ${MAX_REMOTE_PLAYERS:-2}
 
       # Só deixa escolher quem joga com o PC do jogo online (host + ponte)
       REQUIRE_ONLINE: ${REQUIRE_ONLINE:-1}

@@ -162,6 +162,7 @@ test.before(async () => {
       BASE_URL: BASE,
       DATA_DIR: dataDir,
       REQUIRE_ONLINE: '0', // a ponte só conecta depois de escolher o jogador neste teste
+      MULTIPLAYER: '1',
       ADMIN_PASSWORD: 'senha-bridge-e2e',
       HOST_KEY,
       DEBUG: '0',
@@ -312,5 +313,71 @@ test('controle só vale com sessão ativa e é solto ao desistir', async () => {
   await sleep(300);
   assert.equal(rec.calls.length, afterEnd);
 
+  await bridge.stop();
+});
+
+test('ponte mantém estados independentes para os dois controles virtuais', async () => {
+  const login = await fetch(`${BASE}/api/admin/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password: 'senha-bridge-e2e' }),
+  });
+  const cookie = login.headers.get('set-cookie').split(';')[0];
+  const admin = (body) => fetch(`${BASE}/api/admin/action`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: cookie },
+    body: JSON.stringify(body),
+  }).then((res) => res.json());
+
+  await admin({ action: 'live_stop' });
+  await admin({ action: 'live_set', url: 'dQw4w9WgXcQ', enabled: true });
+  const ana = await api('/api/live/join', { method: 'POST', body: { nick: 'Slot A' } });
+  const bia = await api('/api/live/join', { method: 'POST', body: { nick: 'Slot B' } });
+  const overview = await fetch(`${BASE}/api/admin/overview`, { headers: { Cookie: cookie } }).then((res) => res.json());
+  const anaPub = overview.live.viewers.find((viewer) => viewer.nick === 'Slot A').pub;
+  const biaPub = overview.live.viewers.find((viewer) => viewer.nick === 'Slot B').pub;
+  await admin({ action: 'live_pick', pub: anaPub, minutes: 5 });
+  await admin({ action: 'live_pick', pub: biaPub, minutes: 5 });
+
+  const meAna = await api(`/api/live/me?v=${ana.data.viewerId}`);
+  const meBia = await api(`/api/live/me?v=${bia.data.viewerId}`);
+  const tokenAna = new URL(meAna.data.playUrl, BASE).searchParams.get('s');
+  const tokenBia = new URL(meBia.data.playUrl, BASE).searchParams.get('s');
+  const host = openWS();
+  await host.opened;
+  host.send({ type: 'hello', role: 'host', key: HOST_KEY });
+  await host.next((message) => message.type === 'hello');
+
+  const viewerAna = openWS();
+  const viewerBia = openWS();
+  await Promise.all([viewerAna.opened, viewerBia.opened]);
+  viewerAna.send({ type: 'hello', role: 'viewer', token: tokenAna });
+  viewerBia.send({ type: 'hello', role: 'viewer', token: tokenBia });
+  await Promise.all([
+    viewerAna.next((message) => message.type === 'hello'),
+    viewerBia.next((message) => message.type === 'hello'),
+  ]);
+
+  const rec = recordingSink();
+  const bridge = createBridge({
+    url: WS_URL,
+    key: HOST_KEY,
+    sink: rec.sink,
+    log: () => {},
+  });
+  bridge.start();
+  await sleep(300);
+  host.send({ type: 'stream:ready' });
+  await Promise.all([
+    viewerAna.next((message) => message.type === 'stream:ready'),
+    viewerBia.next((message) => message.type === 'stream:ready'),
+  ]);
+
+  viewerAna.send({ type: 'input', payload: padPayload({ pressed: [0] }) });
+  viewerBia.send({ type: 'input', payload: padPayload({ pressed: [1] }) });
+  await until(() => rec.calls.some((state) => state.playerSlot === 1)
+    && rec.calls.some((state) => state.playerSlot === 2));
+  assert.deepEqual(rec.calls.find((state) => state.playerSlot === 1).buttons, ['A']);
+  assert.deepEqual(rec.calls.find((state) => state.playerSlot === 2).buttons, ['B']);
   await bridge.stop();
 });

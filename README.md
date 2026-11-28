@@ -97,6 +97,8 @@ Uma placa de captura só atende **um programa por vez**. Se o OBS (que transmite
 | `PROVISION_TIMEOUT_SEC` | `180` | Prazo para a imagem subir antes de cancelar. Use `300` com captura de janela. |
 | `REQUIRE_ONLINE` | `1` | `0` desliga a trava de PC offline (desenvolvimento). |
 | `REQUIRE_BRIDGE` | `1` | `0` exige só o host (ex.: Xbox com placa de captura, sem ponte). |
+| `MULTIPLAYER` | `0` | `1` permite até dois jogadores remotos na mesma sessão e partida. O segundo entra no tempo restante, sem reiniciar o relógio. |
+| `MAX_REMOTE_PLAYERS` | `2` | Máximo de jogadores remotos simultâneos (1 ou 2; só vale com `MULTIPLAYER=1`). |
 | `STUN_URL` | Google STUN | Servidor STUN. |
 | `TURN_URL`, `TURN_USERNAME`, `TURN_CREDENTIAL` | vazios | TURN para jogadores atrás de CGNAT/firewall rígido. |
 | `XBOX_POWER_ON_CMD`, `XBOX_POWER_OFF_CMD` | vazios | Comandos opcionais de ligar/desligar o Xbox (executados no servidor). |

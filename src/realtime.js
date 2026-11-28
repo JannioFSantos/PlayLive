@@ -41,7 +41,13 @@ const PUBLIC_STATE_INTERVAL_MS = 400;
 export function attachRealtime(server) {
   const wss = createWebSocketServer({ server, path: '/ws', maxPayload: 256 * 1024 });
 
-  const presence = { host: null, bridge: null, viewer: null, admins: new Set() };
+  const presence = {
+    host: null,
+    bridge: null,
+    viewer: null,
+    viewers: new Map(),
+    admins: new Set(),
+  };
   let lastPublicBroadcast = 0;
   let pendingBroadcast = null;
 
@@ -77,6 +83,7 @@ export function attachRealtime(server) {
       minutes: Math.round(s.durationMs / 60_000),
       streamReady: Boolean(s.streamReady),
       customerFirstName: s.customer.name.split(' ')[0],
+      players: (s.players ?? []).map((player) => ({ slot: player.slot, name: player.name })),
     };
   }
 
@@ -102,6 +109,7 @@ export function attachRealtime(server) {
 
     if (presence.host) send(presence.host, { type: 'host:state', state, session: hostSessionInfo() });
     if (presence.viewer) send(presence.viewer, payload);
+    for (const ws of presence.viewers.keys()) send(ws, payload);
     if (presence.bridge) send(presence.bridge, payload);
     for (const admin of presence.admins) send(admin, payload);
   }
@@ -112,6 +120,13 @@ export function attachRealtime(server) {
 
   function relayToViewer(message) {
     if (presence.viewer) send(presence.viewer, message);
+    for (const ws of presence.viewers.keys()) send(ws, message);
+  }
+
+  function relayToPlayer(slot, message) {
+    for (const [ws, playerSlot] of presence.viewers) {
+      if (playerSlot === slot) send(ws, message);
+    }
   }
 
   function relayToHost(message) {
@@ -173,9 +188,27 @@ export function attachRealtime(server) {
           if (state.session) {
             state.session.viewer.connected = false;
             state.session.viewer.lastSeenAt = now();
+            for (const player of state.session.players ?? []) {
+              if (presence.viewers.get(ws) === player.slot) {
+                player.viewer.connected = false;
+              }
+            }
           }
         });
         relayToHost({ type: 'viewer:left' });
+        broadcastToAdmins({ type: 'presence', presence: presenceSnapshot() });
+      }
+      if (presence.viewers.has(ws)) {
+        const slot = presence.viewers.get(ws);
+        presence.viewers.delete(ws);
+        store.mutate((state) => {
+          const player = (state.session?.players ?? []).find((item) => item.slot === slot);
+          if (player?.viewer) {
+            player.viewer.connected = false;
+            player.viewer.lastSeenAt = now();
+          }
+        });
+        relayToHost({ type: 'viewer:left', playerSlot: slot });
         broadcastToAdmins({ type: 'presence', presence: presenceSnapshot() });
       }
       presence.admins.delete(ws);
@@ -209,34 +242,56 @@ export function attachRealtime(server) {
         // Quem tem a mídia (host) cria a oferta; o player só responde.
         case 'offer':
           if (role !== 'host') return;
-          return relayToViewer({ type: 'offer', payload: msg.payload });
+          return relayToPlayer(Number(msg.playerSlot ?? 1), { type: 'offer', payload: msg.payload });
 
         case 'answer':
           if (role !== 'viewer') return;
-          return relayToHost({ type: 'answer', payload: msg.payload });
+          return relayToHost({
+            type: 'answer',
+            payload: msg.payload,
+            playerSlot: client.meta.playerSlot ?? 1,
+          });
 
         case 'request-offer':
           if (role !== 'viewer') return;
-          return relayToHost({ type: 'request-offer' });
+          return relayToHost({ type: 'request-offer', playerSlot: client.meta.playerSlot ?? 1 });
 
         case 'candidate':
-          if (role === 'viewer') return relayToHost({ type: 'candidate', payload: msg.payload });
-          if (role === 'host') return relayToViewer({ type: 'candidate', payload: msg.payload });
+          if (role === 'viewer') {
+            return relayToHost({ type: 'candidate', payload: msg.payload, playerSlot: client.meta.playerSlot ?? 1 });
+          }
+          if (role === 'host') {
+            return relayToPlayer(Number(msg.playerSlot ?? 1), { type: 'candidate', payload: msg.payload });
+          }
           return;
 
         case 'input':
           if (role !== 'viewer' || !inputAllowed(client)) return;
-          if (presence.bridge) send(presence.bridge, { type: 'input', payload: msg.payload });
+          if (presence.bridge) {
+            send(presence.bridge, {
+              type: 'input',
+              payload: {
+                ...(msg.payload && typeof msg.payload === 'object' ? msg.payload : {}),
+                playerSlot: client.meta.playerSlot ?? 1,
+              },
+            });
+          }
           return;
 
         case 'input:ping':
           if (role !== 'viewer' || !inputAllowed(client)) return;
-          if (presence.bridge) send(presence.bridge, { type: 'input:ping', id: msg.id });
+          if (presence.bridge) {
+            send(presence.bridge, {
+              type: 'input:ping',
+              id: msg.id,
+              playerSlot: client.meta.playerSlot ?? 1,
+            });
+          }
           return;
 
         case 'input:pong':
           if (role !== 'bridge') return;
-          return relayToViewer({ type: 'input:pong', id: msg.id });
+          return relayToPlayer(Number(msg.playerSlot ?? 1), { type: 'input:pong', id: msg.id });
 
         case 'stream:ready': {
           if (role !== 'host') return;
@@ -273,7 +328,10 @@ export function attachRealtime(server) {
       switch (msg.role) {
         case 'viewer': {
           const session = store.data.session;
-          if (!session || !msg.token || !safeEqual(session.token, msg.token)) {
+          const player = (session?.players ?? []).find((item) => item.token === msg.token);
+          const legacyToken = Boolean(session && msg.token && safeEqual(session.token, msg.token)
+            && !(config.multiplayer && Array.isArray(session.players)));
+          if (!session || (!player && !legacyToken)) {
             return fail(client, 'invalid_token', 'Link de sessão inválido ou expirado.');
           }
           if (!ACTIVE_STATUSES.includes(session.status)) {
@@ -282,31 +340,45 @@ export function attachRealtime(server) {
             });
           }
 
-          if (presence.viewer && presence.viewer !== client) {
+          const playerSlot = player?.slot ?? 1;
+          if (playerSlot === 1 && presence.viewer && presence.viewer !== client) {
             closeSocket(presence.viewer, 4001, 'outra_aba');
+          }
+          if (presence.viewers.has(client)) return;
+          for (const [other, slot] of presence.viewers) {
+            if (slot === playerSlot && other !== client) closeSocket(other, 4001, 'outra_aba');
           }
 
           client.meta.role = 'viewer';
           client.meta.sessionID = session.id;
-          presence.viewer = client;
+          client.meta.playerSlot = playerSlot;
+          if (playerSlot === 1) presence.viewer = client;
+          presence.viewers.set(client, playerSlot);
 
           store.mutate((state) => {
             if (!state.session) return;
             state.session.viewer.connected = true;
             state.session.viewer.lastSeenAt = now();
             state.session.viewer.connections = (state.session.viewer.connections ?? 0) + 1;
+            const currentPlayer = (state.session.players ?? []).find((item) => item.slot === playerSlot);
+            if (currentPlayer) {
+              currentPlayer.viewer.connected = true;
+              currentPlayer.viewer.lastSeenAt = now();
+              currentPlayer.viewer.connections = (currentPlayer.viewer.connections ?? 0) + 1;
+            }
           });
 
           send(client, {
             type: 'hello',
             ok: true,
             role: 'viewer',
+            playerSlot,
             iceServers: config.iceServers,
             state: publicState(),
             session: sessionView(msg.token),
             hostOnline: Boolean(presence.host),
           });
-          relayToHost({ type: 'viewer:joined', at: now() });
+          relayToHost({ type: 'viewer:joined', at: now(), playerSlot });
           broadcastToAdmins({ type: 'presence', presence: presenceSnapshot() });
           return;
         }
@@ -332,7 +404,10 @@ export function attachRealtime(server) {
           });
           if (presence.viewer) {
             send(presence.viewer, { type: 'host:online' });
-            send(client, { type: 'viewer:joined', at: now() });
+          }
+          for (const [viewer, playerSlot] of presence.viewers) {
+            send(viewer, { type: 'host:online' });
+            send(client, { type: 'viewer:joined', at: now(), playerSlot });
           }
           broadcastToAdmins({ type: 'presence', presence: presenceSnapshot() });
           broadcastState(true);
@@ -375,6 +450,7 @@ export function attachRealtime(server) {
     return {
       host: Boolean(presence.host),
       viewer: Boolean(presence.viewer),
+      viewers: presence.viewers.size,
       bridge: Boolean(presence.bridge),
       admins: presence.admins.size,
     };
@@ -437,12 +513,31 @@ export function attachRealtime(server) {
       presence.viewer = null;
       setTimeout(() => closeSocket(viewer, 4003, 'session_ended'), 1500);
     }
+    for (const ws of [...presence.viewers.keys()]) {
+      send(ws, payload);
+      presence.viewers.delete(ws);
+      setTimeout(() => closeSocket(ws, 4003, 'session_ended'), 1500);
+    }
     relayToHost(payload);
     if (presence.bridge) send(presence.bridge, payload);
     broadcastToAdmins(payload);
     store.mutate((state) => {
       if (state.session?.viewer) state.session.viewer.connected = false;
     });
+    broadcastState(true);
+  });
+
+  bus.on('session:player_ended', ({ player }) => {
+    const slot = player.slot;
+    for (const [ws, playerSlot] of presence.viewers) {
+      if (playerSlot !== slot) continue;
+      send(ws, { type: 'session:ended', reason: 'forfeited', sessionID: store.data.session?.id });
+      presence.viewers.delete(ws);
+      if (presence.viewer === ws) presence.viewer = null;
+      setTimeout(() => closeSocket(ws, 4003, 'session_ended'), 1500);
+    }
+    relayToHost({ type: 'viewer:left', playerSlot: slot });
+    broadcastToAdmins({ type: 'presence', presence: presenceSnapshot() });
     broadcastState(true);
   });
 

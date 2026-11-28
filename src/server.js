@@ -17,6 +17,7 @@ import {
   sessionView,
   slotStatus,
   tick,
+  forfeitGuestPlayer,
 } from './sessions.js';
 import {
   ADMIN_COOKIE,
@@ -100,6 +101,8 @@ app.get('/api/config', (_req, res) => {
       maxMinutes: config.maxGuestMinutes,
       defaultMinutes: config.defaultGuestMinutes,
       provisionTimeoutSec: config.provisionTimeoutSec,
+      multiplayer: config.multiplayer,
+      maxRemotePlayers: config.maxRemotePlayers,
     },
   });
 });
@@ -150,7 +153,10 @@ app.post('/api/live/chat/send', (req, res) => {
 
 function sessionByToken(tokenValue) {
   const session = store.data.session;
-  if (!session || !tokenValue || !safeEqual(session.token, tokenValue)) {
+  const player = (session?.players ?? []).find((item) => item.token === tokenValue);
+  if (!session || !tokenValue
+    || (!player && ((config.multiplayer && Array.isArray(session.players))
+      || !safeEqual(session.token, tokenValue)))) {
     throw new ApiError(401, 'invalid_token', 'Link de sessão inválido ou expirado.');
   }
   return session;
@@ -158,7 +164,9 @@ function sessionByToken(tokenValue) {
 
 app.get('/api/session', (req, res) => {
   limit(req, 'session:view', 240, 60_000);
-  res.json(sessionView(sessionByToken(String(req.query.s ?? '')).token));
+  const tokenValue = String(req.query.s ?? '');
+  sessionByToken(tokenValue);
+  res.json(sessionView(tokenValue));
 });
 
 app.post('/api/session/forfeit', (req, res) => {
@@ -168,6 +176,14 @@ app.post('/api/session/forfeit', (req, res) => {
   const session = sessionByToken(tokenValue);
   if (!['active', 'provisioning'].includes(session.status)) {
     throw conflict('Esta sessão já foi encerrada.', 'session_already_ended');
+  }
+  const playerEnded = forfeitGuestPlayer(tokenValue);
+  if (playerEnded) {
+    return res.json({
+      ok: true,
+      ended: playerEnded.ended,
+      status: playerEnded.session.status,
+    });
   }
   const ended = endSession('forfeited', { sessionID: session.id, by: 'player' });
   res.json({ ok: true, ended: Boolean(ended), status: ended?.status ?? session.status });
@@ -233,6 +249,13 @@ app.get('/api/admin/overview', (req, res) => {
           streamReady: s.streamReady,
           viewerConnected: Boolean(s.viewer?.connected),
           endedReason: s.endedReason,
+          players: config.multiplayer
+            ? (s.players ?? []).map((player) => ({
+                slot: player.slot,
+                name: player.name,
+                viewerConnected: Boolean(player.viewer?.connected),
+              }))
+            : undefined,
           playUrl: `${config.baseUrl}/play.html?s=${encodeURIComponent(s.token)}`,
         }
       : null,

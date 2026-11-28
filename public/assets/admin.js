@@ -139,7 +139,9 @@ function render() {
 
   // Presença
   $('presenceHost').textContent = presence.host ? 'online' : 'offline';
-  $('presenceViewer').textContent = presence.viewer ? 'conectado' : '—';
+  $('presenceViewer').textContent = presence.viewers
+    ? `${presence.viewers} conectado(s)`
+    : presence.viewer ? 'conectado' : '—';
   $('presenceBridge').textContent = presence.bridge ? 'online' : '—';
   $('presenceAdmins').textContent = String(presence.admins ?? 0);
 
@@ -155,7 +157,9 @@ function render() {
   $('sessionBadge').className = `badge ${active ? 'green' : ''}`;
   $('sessionBadge').innerHTML = `<span class="dot ${active ? 'live' : ''}"></span>${label}`;
   $('sessionMinutes').textContent = session ? `${session.minutes} min` : '—';
-  $('sessionPlayer').textContent = session?.player ?? '—';
+  $('sessionPlayer').textContent = session?.players?.length
+    ? session.players.map((player) => `#${player.slot} ${player.name}`).join(' · ')
+    : (session?.player ?? '—');
   $('sessionStart').textContent = session?.startedAt ? fmtDateTime(session.startedAt) : '—';
   $('sessionEnd').textContent = session?.endsAt ? fmtDateTime(session.endsAt) : '—';
   $('sessionViewer').textContent = session ? (session.viewerConnected ? 'sim' : 'não') : '—';
@@ -343,7 +347,9 @@ document.addEventListener('click', async (event) => {
         method: 'POST',
         body: { action: 'live_pick', pub: btn.dataset.pub, minutes },
       });
-      toast(`${result.nick} vai jogar por ${result.minutes} min.`, 'green');
+      toast(result.playerSlot > 1
+        ? `${result.nick} entrou como jogador ${result.playerSlot}; a sessão termina no horário já definido.`
+        : `${result.nick} vai jogar por ${result.minutes} min.`, 'green');
     } else if (kind === 'kick') {
       await api('/api/admin/action', { method: 'POST', body: { action: 'live_kick', pub: btn.dataset.pub } });
     } else if (kind === 'chat-toggle') {

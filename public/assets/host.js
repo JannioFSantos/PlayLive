@@ -11,11 +11,11 @@ const $ = (id) => document.getElementById(id);
 let ws = null;
 let key = '';
 let stream = null;
-let pc = null;
+const peers = new Map();
+const inputChannels = new Map();
 let session = null;
-let viewerPresent = false;
+const viewerSlots = new Set();
 let readySent = false;
-let publishing = false;
 let bitrateKbps = 6000;
 let fps = 60;
 let captureMode = 'card';
@@ -32,8 +32,7 @@ const LOCAL_PORT = Number(params.get('bridgePort') || localStorage.getItem('pl_b
 let local = null;
 let localReady = false;
 let localTimer = null;
-let inputDC = null;
-let lastInputSeq = -1;
+const lastInputSeq = new Map();
 const inputStats = { p2p: 0, dropped: 0 };
 
 /* ------------------------------------------------------------------ */
@@ -178,9 +177,9 @@ async function handleMessage(msg) {
       log('Sessão encerrada.', 'warn');
       applySession({ ...session, status: 'ended', endsAt: session?.endsAt ?? null });
       if ($('keepCapture').checked && stream) {
-        closePeer();
+        closePeers();
         readySent = false;
-        viewerPresent = false;
+        viewerSlots.clear();
         updateUI();
         log('Captura mantida ativa, aguardando o próximo jogador.');
       } else {
@@ -190,23 +189,29 @@ async function handleMessage(msg) {
       break;
 
     case 'viewer:joined':
-      viewerPresent = true;
-      log('Player conectado.');
-      updateUI();
-      if (stream) await publish();
+      {
+        const slot = Number(msg.playerSlot ?? 1);
+        viewerSlots.add(slot);
+        log(`Player ${slot} conectado.`);
+        updateUI();
+        if (stream) await publish(slot);
+      }
       break;
 
     case 'viewer:left':
-      viewerPresent = false;
-      log('Player desconectou (o tempo continua correndo).', 'warn');
-      closePeer();
-      updateUI();
+      {
+        const slot = Number(msg.playerSlot ?? 1);
+        viewerSlots.delete(slot);
+        log(`Player ${slot} desconectou (o tempo continua correndo).`, 'warn');
+        closePeer(slot);
+        updateUI();
+      }
       break;
 
     case 'answer':
       try {
-        await pc?.setRemoteDescription(msg.payload);
-        log('Negociação WebRTC concluída.');
+        await peers.get(Number(msg.playerSlot ?? 1))?.setRemoteDescription(msg.payload);
+        log(`Negociação WebRTC concluída para o player ${Number(msg.playerSlot ?? 1)}.`);
       } catch (err) {
         log(`Falha no answer: ${err.message}`, 'error');
       }
@@ -214,15 +219,17 @@ async function handleMessage(msg) {
 
     case 'candidate':
       try {
-        await pc?.addIceCandidate(msg.payload);
+        await peers.get(Number(msg.playerSlot ?? 1))?.addIceCandidate(msg.payload);
       } catch {
         /* candidato atrasado */
       }
       break;
 
-    case 'request-offer':
-      if (stream) await publish();
+    case 'request-offer': {
+      const slot = Number(msg.playerSlot ?? 1);
+      if (stream) await publish(slot);
       break;
+    }
 
     case 'input:ack':
       break;
@@ -256,10 +263,11 @@ function sendLocal(message) {
   if (local?.readyState === WebSocket.OPEN) local.send(JSON.stringify(message));
 }
 
-function sendInputChannel(message) {
-  if (inputDC?.readyState === 'open') {
+function sendInputChannel(slot, message) {
+  const channel = inputChannels.get(slot);
+  if (channel?.readyState === 'open') {
     try {
-      inputDC.send(JSON.stringify(message));
+      channel.send(JSON.stringify(message));
     } catch {
       /* canal fechando */
     }
@@ -267,8 +275,8 @@ function sendInputChannel(message) {
 }
 
 /** Diz ao player se os comandos P2P têm para onde ir (ponte local conectada). */
-function announceRoute() {
-  sendInputChannel({ k: 'route', ok: localReady });
+function announceRoute(slot) {
+  sendInputChannel(slot, { k: 'route', ok: localReady });
 }
 
 function connectLocal() {
@@ -297,9 +305,9 @@ function connectLocal() {
       localReady = true;
       setLocalBadge(true);
       log('Ponte de controle local conectada: comandos por P2P liberados.');
-      announceRoute();
+      for (const slot of inputChannels.keys()) announceRoute(slot);
     } else if (msg.type === 'pong') {
-      sendInputChannel({ k: 'pong', id: msg.id });
+      sendInputChannel(Number(msg.playerSlot ?? 1), { k: 'pong', id: msg.id });
     }
   };
   const down = () => {
@@ -310,7 +318,7 @@ function connectLocal() {
     setLocalBadge(false);
     if (was) {
       log('Ponte de controle local desconectada. Comandos voltam pelo WebSocket.', 'warn');
-      announceRoute();
+      for (const slot of inputChannels.keys()) announceRoute(slot);
     }
     localTimer = setTimeout(connectLocal, 3000);
   };
@@ -318,7 +326,7 @@ function connectLocal() {
   socket.onerror = () => {};
 }
 
-function onInputChannelMessage(raw) {
+function onInputChannelMessage(raw, slot) {
   let msg;
   try {
     msg = JSON.parse(raw);
@@ -328,17 +336,17 @@ function onInputChannelMessage(raw) {
 
   if (msg.k === 'i') {
     // Canal não ordenado: descarta pacotes mais velhos que o último aplicado.
-    if (!Number.isFinite(msg.s) || msg.s <= lastInputSeq) return;
-    lastInputSeq = msg.s;
+    if (!Number.isFinite(msg.s) || msg.s <= (lastInputSeq.get(slot) ?? -1)) return;
+    lastInputSeq.set(slot, msg.s);
     if (!localReady) {
       inputStats.dropped++;
       return;
     }
     inputStats.p2p++;
-    sendLocal({ type: 'input', payload: msg.p });
+    sendLocal({ type: 'input', payload: { ...msg.p, playerSlot: slot } });
   } else if (msg.k === 'ping') {
-    if (localReady) sendLocal({ type: 'ping', id: msg.id });
-    else announceRoute();
+    if (localReady) sendLocal({ type: 'ping', id: msg.id, playerSlot: slot });
+    else announceRoute(slot);
   }
 }
 
@@ -380,8 +388,10 @@ function updateUI() {
     $('sessionHours').textContent = session.minutes ? `${session.minutes} min` : '—';
   }
 
-  $('viewerState').textContent = viewerPresent ? 'sim' : 'não';
-  $('publishState').textContent = publishing ? 'sim' : 'não';
+  $('viewerState').textContent = viewerSlots.size ? `${viewerSlots.size} conectado(s)` : 'não';
+  $('publishState').textContent = [...peers.values()].some((peer) => peer.connectionState === 'connected')
+    ? 'sim'
+    : 'não';
 
   $('btnStart').disabled = Boolean(stream);
   $('btnStop').disabled = !stream;
@@ -545,7 +555,7 @@ async function startCapture() {
   updateUI();
 
   if (['provisioning', 'active'].includes(session?.status)) sendReady();
-  if (viewerPresent) await publish();
+  for (const slot of viewerSlots) await publish(slot);
 
   return stream;
 }
@@ -569,7 +579,7 @@ async function startWindowCapture() {
     log('Captura de janela ativa. Mantenha a janela do jogo visível.');
     updateUI();
     if (['provisioning', 'active'].includes(session?.status)) sendReady();
-    if (viewerPresent) await publish();
+    for (const slot of viewerSlots) await publish(slot);
   } catch (err) {
     if (err.name === 'NotAllowedError') {
       log('Captura de janela cancelada pelo operador.', 'warn');
@@ -590,44 +600,43 @@ function sendReady() {
   }
 }
 
-async function publish() {
+async function publish(slot = 1) {
   if (!stream || !ws?.ready) return;
 
-  closePeer();
-  log('Negociando vídeo com o player…');
-
-  pc = new RTCPeerConnection({ iceServers });
+  closePeer(slot);
+  log(`Negociando vídeo com o player ${slot}…`);
+  const pc = new RTCPeerConnection({ iceServers });
+  peers.set(slot, pc);
 
   // Canal de comandos: não ordenado e sem reenvio (comportamento de UDP).
   // Um estado antigo de botão não vale a pena ser reenviado.
-  inputDC = pc.createDataChannel('input', { ordered: false, maxRetransmits: 0 });
+  const inputDC = pc.createDataChannel('input', { ordered: false, maxRetransmits: 0 });
+  inputChannels.set(slot, inputDC);
   inputDC.onopen = () => {
-    lastInputSeq = -1;
-    log('Canal de comandos P2P aberto.');
-    announceRoute();
+    lastInputSeq.set(slot, -1);
+    log(`Canal de comandos P2P do player ${slot} aberto.`);
+    announceRoute(slot);
   };
   inputDC.onclose = () => {
-    log('Canal de comandos P2P fechado.', 'warn');
-    sendLocal({ type: 'release' });
+    log(`Canal de comandos P2P do player ${slot} fechado.`, 'warn');
+    sendLocal({ type: 'release', playerSlot: slot });
   };
-  inputDC.onmessage = (event) => onInputChannelMessage(event.data);
+  inputDC.onmessage = (event) => onInputChannelMessage(event.data, slot);
 
   pc.onicecandidate = (event) => {
-    if (event.candidate) ws?.send({ type: 'candidate', payload: event.candidate });
+    if (event.candidate) ws?.send({ type: 'candidate', payload: event.candidate, playerSlot: slot });
   };
 
   pc.onconnectionstatechange = () => {
-    const state = pc?.connectionState;
+    if (peers.get(slot) !== pc) return;
+    const state = pc.connectionState;
     if (state === 'connected') {
-      publishing = true;
-      log('Player recebendo vídeo (P2P conectado).');
-      startStats();
+      log(`Player ${slot} recebendo vídeo (P2P conectado).`);
+      startStats(pc);
     } else if (state === 'failed') {
-      publishing = false;
-      log('Conexão P2P falhou. O player vai pedir uma nova negociação.', 'error');
+      log(`Conexão P2P do player ${slot} falhou. O player vai pedir nova negociação.`, 'error');
     } else if (state === 'disconnected') {
-      publishing = false;
-      log('Conexão P2P instável.', 'warn');
+      log(`Conexão P2P do player ${slot} instável.`, 'warn');
     }
     updateUI();
   };
@@ -641,10 +650,10 @@ async function publish() {
   try {
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
-    ws.send({ type: 'offer', payload: offer });
+    ws.send({ type: 'offer', payload: offer, playerSlot: slot });
   } catch (err) {
-    log(`Falha ao criar oferta: ${err.message}`, 'error');
-    closePeer();
+    log(`Falha ao criar oferta para o player ${slot}: ${err.message}`, 'error');
+    closePeer(slot);
   }
   updateUI();
 }
@@ -664,30 +673,36 @@ async function tuneSender(sender, isVideo) {
   }
 }
 
-function closePeer() {
-  stopStats();
-  publishing = false;
-  if (inputDC) {
-    inputDC.onclose = null;
-    sendLocal({ type: 'release' });
+function closePeer(slot) {
+  const channel = inputChannels.get(slot);
+  const peer = peers.get(slot);
+  inputChannels.delete(slot);
+  peers.delete(slot);
+  lastInputSeq.delete(slot);
+  if (channel) {
+    channel.onclose = null;
+    sendLocal({ type: 'release', playerSlot: slot });
     try {
-      inputDC.close();
+      channel.close();
     } catch {
       /* ignore */
     }
-    inputDC = null;
   }
   try {
-    pc?.close();
+    peer?.close();
   } catch {
     /* ignore */
   }
-  pc = null;
+  if (peers.size === 0) stopStats();
   updateUI();
 }
 
+function closePeers() {
+  for (const slot of [...peers.keys()]) closePeer(slot);
+}
+
 function teardown() {
-  closePeer();
+  closePeers();
   stopMeter();
   if (stream) {
     stream.getTracks().forEach((t) => t.stop());
@@ -695,8 +710,7 @@ function teardown() {
   }
   $('preview').srcObject = null;
   readySent = false;
-  viewerPresent = false;
-  publishing = false;
+  viewerSlots.clear();
   updateUI();
   log('Captura parada.');
 }
@@ -767,8 +781,7 @@ function stopMeter() {
 /* ------------------------------------------------------------------ */
 
 function startStats() {
-  clearInterval(statsTimer);
-  lastStats = null;
+  if (statsTimer) return;
   statsTimer = setInterval(sendStats, 3000);
 }
 
@@ -779,7 +792,8 @@ function stopStats() {
 }
 
 async function sendStats() {
-  if (!pc || pc.connectionState !== 'connected') return;
+  const pc = [...peers.values()].find((peer) => peer.connectionState === 'connected');
+  if (!pc) return;
   try {
     const report = await pc.getStats();
     let out = null;
@@ -898,6 +912,6 @@ function bindUI() {
 
   window.addEventListener('beforeunload', () => {
     stream?.getTracks().forEach((t) => t.stop());
-    pc?.close();
+    for (const peer of peers.values()) peer.close();
   });
 }

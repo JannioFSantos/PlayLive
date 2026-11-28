@@ -326,3 +326,137 @@ test('live: sala por apelido, dono escolhe, escolhido ganha acesso sem pagar', a
   });
   assert.deepEqual(freshChat.data.messages, []);
 });
+
+test('live: modo multiplayer cria dois jogadores com slots e links separados', async () => {
+  const port = 8199;
+  const base = `http://127.0.0.1:${port}`;
+  const password = 'senha-multiplayer';
+  const hostKey = 'chave-multiplayer';
+  const child = spawn(process.execPath, ['src/server.js'], {
+    cwd: root,
+    env: {
+      ...process.env,
+      PORT: String(port),
+      BASE_URL: base,
+      DATA_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'playlive-multi-')),
+      ADMIN_PASSWORD: password,
+      HOST_KEY: hostKey,
+      REQUIRE_ONLINE: '0',
+      MULTIPLAYER: '1',
+      MAX_REMOTE_PLAYERS: '2',
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  children.push(child);
+
+  for (let i = 0; i < 60; i++) {
+    try {
+      if ((await fetch(`${base}/api/health`)).ok) break;
+    } catch {
+      /* subindo */
+    }
+    await sleep(250);
+  }
+
+  const call = async (pathname, { method = 'GET', body, cookie } = {}) => {
+    const res = await fetch(`${base}${pathname}`, {
+      method,
+      headers: { 'Content-Type': 'application/json', ...(cookie ? { Cookie: cookie } : {}) },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    const text = await res.text();
+    return { status: res.status, data: text ? JSON.parse(text) : null, headers: res.headers };
+  };
+
+  const login = await call('/api/admin/login', {
+    method: 'POST',
+    body: { password },
+  });
+  const cookie = login.headers.get('set-cookie').split(';')[0];
+  const admin = (action, extra = {}) => call('/api/admin/action', {
+    method: 'POST',
+    cookie,
+    body: { action, ...extra },
+  });
+
+  await admin('live_set', { url: 'dQw4w9WgXcQ', enabled: true });
+  const ana = (await call('/api/live/join', { method: 'POST', body: { nick: 'Ana' } })).data;
+  const bia = (await call('/api/live/join', { method: 'POST', body: { nick: 'Bia' } })).data;
+  const overview = (await call('/api/admin/overview', { cookie })).data;
+  const anaPub = overview.live.viewers.find((v) => v.nick === 'Ana').pub;
+  const biaPub = overview.live.viewers.find((v) => v.nick === 'Bia').pub;
+
+  const first = await admin('live_pick', { pub: anaPub, minutes: 10 });
+  assert.equal(first.status, 200);
+  assert.equal(first.data.playerSlot, 1);
+
+  const second = await admin('live_pick', { pub: biaPub, minutes: 10 });
+  assert.equal(second.status, 200);
+  assert.equal(second.data.playerSlot, 2);
+
+  const meAna = (await call(`/api/live/me?v=${ana.viewerId}`)).data;
+  const meBia = (await call(`/api/live/me?v=${bia.viewerId}`)).data;
+  assert.equal(meAna.playerSlot, 1);
+  assert.equal(meBia.playerSlot, 2);
+  assert.notEqual(meAna.playUrl, meBia.playUrl);
+
+  const tokenAna = new URL(meAna.playUrl, base).searchParams.get('s');
+  const tokenBia = new URL(meBia.playUrl, base).searchParams.get('s');
+  const sessionAna = (await call(`/api/session?s=${encodeURIComponent(tokenAna)}`)).data;
+  const sessionBia = (await call(`/api/session?s=${encodeURIComponent(tokenBia)}`)).data;
+  assert.equal(sessionAna.playerSlot, 1);
+  assert.equal(sessionBia.playerSlot, 2);
+  assert.deepEqual(sessionAna.players.map((player) => player.slot), [1, 2]);
+
+  const connectRole = async (role, payload = {}) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+    sockets.push(ws);
+    const received = [];
+    ws.addEventListener('message', (event) => received.push(JSON.parse(event.data)));
+    await new Promise((resolve, reject) => {
+      ws.addEventListener('open', resolve);
+      ws.addEventListener('error', () => reject(new Error('ws error')));
+    });
+    ws.send(JSON.stringify({ type: 'hello', role, ...payload }));
+    await until(() => received.some((message) => message.type === 'hello' && message.ok));
+    return { ws, received };
+  };
+  const host = await connectRole('host', { key: hostKey });
+  const bridge = await connectRole('bridge', { key: hostKey });
+  const viewerAna = await connectRole('viewer', { token: tokenAna });
+  const viewerBia = await connectRole('viewer', { token: tokenBia });
+
+  host.ws.send(JSON.stringify({ type: 'offer', playerSlot: 2, payload: { sdp: 'slot-2' } }));
+  await until(() => viewerBia.received.some((message) => message.type === 'offer'));
+  assert.equal(viewerBia.received.find((message) => message.type === 'offer').payload.sdp, 'slot-2');
+  assert.equal(viewerAna.received.some((message) => message.type === 'offer'), false);
+
+  viewerAna.ws.send(JSON.stringify({
+    type: 'input',
+    payload: { axes: [0, 0, 0, 0], buttons: [], playerSlot: 2 },
+  }));
+  viewerBia.ws.send(JSON.stringify({
+    type: 'input',
+    payload: { axes: [0, 0, 0, 0], buttons: [], playerSlot: 1 },
+  }));
+  await until(() => bridge.received.filter((message) => message.type === 'input').length === 2);
+  const routedInputs = bridge.received.filter((message) => message.type === 'input');
+  assert.deepEqual(routedInputs.map((message) => message.payload.playerSlot), [1, 2]);
+
+  const biaForfeit = await call('/api/session/forfeit', {
+    method: 'POST',
+    body: { token: tokenBia, confirm: true },
+  });
+  assert.equal(biaForfeit.data.ended, false);
+  await until(() => viewerBia.received.some((message) => message.type === 'session:ended'));
+  assert.equal((await call(`/api/session?s=${encodeURIComponent(tokenAna)}`)).data.status, 'provisioning');
+  assert.equal((await call(`/api/session?s=${encodeURIComponent(tokenBia)}`)).status, 401);
+
+  const anaForfeit = await call('/api/session/forfeit', {
+    method: 'POST',
+    body: { token: tokenAna, confirm: true },
+  });
+  assert.equal(anaForfeit.data.ended, true);
+  assert.equal((await call(`/api/session?s=${encodeURIComponent(tokenAna)}`)).status, 401);
+  child.kill();
+});

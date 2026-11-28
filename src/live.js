@@ -5,7 +5,7 @@ import { ApiError, bad, conflict, notFound } from './errors.js';
 import { now } from './util.js';
 import { config } from './config.js';
 import { assertOnline } from './availability.js';
-import { ACTIVE_STATUSES, remainingMs, slotStatus, startGuestSession } from './sessions.js';
+import { ACTIVE_STATUSES, addGuestPlayer, remainingMs, slotStatus, startGuestSession } from './sessions.js';
 import { liveChatStatus, resetLiveChat } from './live-chat.js';
 
 /**
@@ -106,12 +106,19 @@ export function publicLive(t = now()) {
   const activeSession = session && ACTIVE_STATUSES.includes(session.status) ? session : null;
   const enabledNow = Boolean(enabled && videoId);
   const queue = [...lobby.values()]
-    .filter((viewer) => viewer.id !== activeSession?.guestViewerId)
+    .filter((viewer) => !activeSession?.players?.some((player) => player.viewerId === viewer.id)
+      && (activeSession?.players || viewer.id !== activeSession?.guestViewerId))
     .sort((a, b) => a.joinedAt - b.joinedAt)
     .map((viewer) => viewer.nick);
   const timeLeft = session?.status === 'active' ? remainingMs(session, t) : 0;
   const playing = enabledNow && timeLeft > 0
-    ? { name: session.customer.name, remainingMs: timeLeft }
+    ? (config.multiplayer
+        ? {
+            name: session.customer.name,
+            players: (session.players ?? []).map((player) => ({ slot: player.slot, name: player.name })),
+            remainingMs: timeLeft,
+          }
+        : { name: session.customer.name, remainingMs: timeLeft })
     : null;
   const chat = liveChatStatus();
 
@@ -161,8 +168,10 @@ export function liveChatIdentity(viewerId) {
     return viewer.nick;
   }
   const session = store.data.session;
-  if (session?.guestViewerId === key && ACTIVE_STATUSES.includes(session.status)) {
-    return session.customer.name;
+  const player = (session?.players ?? []).find((item) => item.viewerId === key);
+  if (ACTIVE_STATUSES.includes(session?.status)) {
+    if (player) return player.name;
+    if (!session.players && session.guestViewerId === key) return session.customer.name;
   }
   throw new ApiError(403, 'not_in_queue', 'Entre na fila para acessar o chat.');
 }
@@ -171,8 +180,13 @@ export function liveChatIdentity(viewerId) {
 export function viewerStatus(viewerId, t = now()) {
   const key = String(viewerId ?? '');
   const session = store.data.session;
-  const chosen = session?.guestViewerId === key
-    && ['provisioning', 'active'].includes(session.status);
+  const player = (session?.players ?? []).find((item) => item.viewerId === key)
+    ?? (!Array.isArray(session?.players) && session?.guestViewerId === key ? {
+      slot: 1,
+      name: session.customer.name,
+      token: session.token,
+    } : null);
+  const chosen = Boolean(player && ['provisioning', 'active'].includes(session.status));
 
   const viewer = lobby.get(key);
   if (viewer) viewer.seenAt = t;
@@ -183,8 +197,9 @@ export function viewerStatus(viewerId, t = now()) {
       joined: true,
       enabled: Boolean(settings.enabled),
       chosen: true,
-      nick: session.customer.name,
-      playUrl: `/play.html?s=${encodeURIComponent(session.token)}`,
+      nick: player.name,
+      playerSlot: player.slot,
+      playUrl: `/play.html?s=${encodeURIComponent(player.token)}`,
       sessionStatus: session.status,
       endsAt: session.endsAt,
     };
@@ -222,12 +237,21 @@ export function pickViewer(pub, minutesInput) {
   if (!viewer) throw notFound('Esse espectador saiu da sala.');
   assertOnline();
   const slot = slotStatus();
-  if (slot.status !== 'free') {
+  if (slot.status !== 'free' && !config.multiplayer) {
     throw conflict('O Xbox está ocupado ou reservado. Encerre a sessão atual antes.', 'slot_busy');
+  }
+  if (slot.status !== 'free') {
+    const result = addGuestPlayer({ nick: viewer.nick, minutes, viewerId: viewer.id });
+    if (!result) throw conflict('A sessão já está cheia ou não aceita outro jogador.', 'slot_busy');
+    return {
+      nick: viewer.nick,
+      minutes: Math.ceil(remainingMs(result.session) / 60_000),
+      playerSlot: result.player.slot,
+    };
   }
   const session = startGuestSession({ nick: viewer.nick, minutes, viewerId: viewer.id });
   if (!session) throw conflict('O Xbox ficou ocupado.', 'slot_busy');
-  return { nick: viewer.nick, minutes };
+  return { nick: viewer.nick, minutes, playerSlot: 1 };
 }
 
 export function kickViewer(pub) {

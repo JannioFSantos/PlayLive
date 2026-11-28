@@ -18,6 +18,7 @@ const token = params.get('s') || localStorage.getItem('xp_play_token') || '';
 
 let session = null;
 let config = null;
+let playerSlot = 1;
 let ws = null;
 let pc = null;
 let remoteStream = null;
@@ -115,6 +116,7 @@ function connect() {
       }
     },
     onOpen(msg) {
+      if (Number.isInteger(msg.playerSlot)) playerSlot = msg.playerSlot;
       if (typeof msg.hostOnline === 'boolean') hostOnline = msg.hostOnline;
       if (msg.state?.session) {
         applySession({ ...session, ...msg.state.session, serverNow: msg.state.serverNow });
@@ -173,7 +175,10 @@ function applySession(next) {
 
 function updateHud() {
   if (!session) return;
-  $('hoursText').textContent = `${session.minutes ?? '—'} min`;
+  const duration = `${session.minutes ?? '—'} min`;
+  $('hoursText').textContent = session.players?.length > 1
+    ? `J${session.playerSlot} · ${duration}`
+    : duration;
 }
 
 /* ------------------------------------------------------------------ */
@@ -693,17 +698,18 @@ function updateRouteLabel() {
 }
 
 function transmit(payload, route) {
+  const routedPayload = { ...payload, playerSlot };
   if (route === 'p2p') {
     if (inputDC.bufferedAmount > 8192) return false;
     try {
-      inputDC.send(JSON.stringify({ k: 'i', s: ++dcSeq, p: payload }));
+      inputDC.send(JSON.stringify({ k: 'i', s: ++dcSeq, p: routedPayload }));
       return true;
     } catch {
       return false;
     }
   }
   if (!ws?.ready) return false;
-  ws.send({ type: 'input', payload });
+  ws.send({ type: 'input', payload: routedPayload });
   return true;
 }
 

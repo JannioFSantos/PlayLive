@@ -13,6 +13,7 @@ Use --dry-run para testar sem ViGEmBus (só imprime o que seria aplicado).
 """
 import json
 import sys
+from collections import OrderedDict
 
 BUTTON_NAMES = [
     "A", "B", "X", "Y",
@@ -105,9 +106,18 @@ def create_pad(dry_run):
 
 def main():
     dry_run = "--dry-run" in sys.argv
-    pad = create_pad(dry_run)
-    if pad is None:
+    primary_pad = create_pad(dry_run)
+    if primary_pad is None:
         return 2
+    pads = OrderedDict([("1", primary_pad)])
+
+    def get_pad(slot):
+        if slot not in pads:
+            pad = create_pad(dry_run)
+            if pad is None:
+                return None
+            pads[slot] = pad
+        return pads[slot]
 
     emit({"ready": True})
 
@@ -121,13 +131,17 @@ def main():
             except ValueError:
                 continue
             if isinstance(state, dict):
-                pad.apply(state)
+                slot = str(state.get("playerSlot", 1))
+                pad = get_pad(slot)
+                if pad is not None:
+                    pad.apply(state)
     finally:
         # stdin fechou (bridge encerrou): garante que nenhum botão fique preso.
-        try:
-            pad.reset()
-        except Exception:
-            pass
+        for pad in pads.values():
+            try:
+                pad.reset()
+            except Exception:
+                pass
     return 0
 
 
