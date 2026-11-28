@@ -9,6 +9,7 @@ import {
   ACTIVE_STATUSES,
   activeSession,
   addGuestPlayer,
+  PLAYER_START_TIMEOUT_MS,
   remainingMs,
   slotStatus,
   startGuestSession,
@@ -24,10 +25,12 @@ import { liveChatStatus, resetLiveChat } from './live-chat.js';
  */
 
 const STALE_MS = 25_000; // sem sinal de vida (heartbeat) por tanto tempo → sai da sala
+const MISSED_TURN_TTL_MS = 30 * 60_000;
 const MAX_VIEWERS = 200;
 
 /** viewerId (segredo do espectador) → { id, pub, nick, joinedAt, seenAt } */
 const lobby = new Map();
+const missedTurns = new Map();
 
 const VIDEO_ID = /^[A-Za-z0-9_-]{11}$/;
 
@@ -73,6 +76,7 @@ export function configureLive({ url, enabled }) {
   });
   if (!nextEnabled) {
     lobby.clear();
+    missedTurns.clear();
     resetLiveChat(false);
   } else if (!current.enabled || current.videoId !== videoId) {
     resetLiveChat(true);
@@ -87,6 +91,7 @@ export function stopLive() {
     pushEvent(state, 'live.stopped');
   });
   lobby.clear();
+  missedTurns.clear();
   resetLiveChat(false);
   bus.emit('state:changed');
   return liveSettings();
@@ -95,6 +100,9 @@ export function stopLive() {
 function prune(t = now()) {
   for (const [key, viewer] of lobby) {
     if (t - viewer.seenAt > STALE_MS) lobby.delete(key);
+  }
+  for (const [key, missed] of missedTurns) {
+    if (t - missed.at > MISSED_TURN_TTL_MS) missedTurns.delete(key);
   }
 }
 
@@ -152,7 +160,6 @@ export function joinLobby(nickInput) {
     nick,
     joinedAt: t,
     seenAt: t,
-    turnMissed: false,
   };
   lobby.set(viewer.id, viewer);
   bus.emit('state:changed');
@@ -186,6 +193,7 @@ export function liveChatIdentity(viewerId) {
 
 /** Heartbeat + resposta: "sou eu o escolhido?" */
 export function viewerStatus(viewerId, t = now()) {
+  prune(t);
   const key = String(viewerId ?? '');
   const session = store.data.session;
   const player = (session?.players ?? []).find((item) => item.viewerId === key)
@@ -210,15 +218,20 @@ export function viewerStatus(viewerId, t = now()) {
       playUrl: `/play.html?s=${encodeURIComponent(player.token)}`,
       sessionStatus: session.status,
       endsAt: session.endsAt,
-      turnMissed: false,
+      serverNow: t,
+      joinDeadlineAt: Number.isFinite(player.selectedAt)
+        && (player.viewer?.connections ?? 0) === 0
+        ? player.selectedAt + PLAYER_START_TIMEOUT_MS
+        : null,
     };
   }
+  const missed = missedTurns.get(key);
   return {
     joined: Boolean(viewer),
     enabled: Boolean(settings.enabled),
     chosen: false,
-    nick: viewer?.nick ?? null,
-    turnMissed: Boolean(viewer?.turnMissed),
+    nick: viewer?.nick ?? missed?.nick ?? null,
+    turnMissed: Boolean(missed),
   };
 }
 
@@ -259,7 +272,6 @@ export function pickViewer(pub, minutesInput, playerCountInput = 1) {
   if (slot.status !== 'free') {
     const result = addGuestPlayer({ nick: viewer.nick, minutes, viewerId: viewer.id });
     if (!result) throw conflict('A sessão já está cheia ou não aceita outro jogador.', 'slot_busy');
-    viewer.turnMissed = false;
     return {
       nick: viewer.nick,
       minutes: Math.ceil(remainingMs(result.session) / 60_000),
@@ -273,19 +285,16 @@ export function pickViewer(pub, minutesInput, playerCountInput = 1) {
     playerCount,
   });
   if (!session) throw conflict('O Xbox ficou ocupado.', 'slot_busy');
-  viewer.turnMissed = false;
   return { nick: viewer.nick, minutes, playerSlot: 1, playerCount };
 }
 
 function advanceAfterPlayerTimeout({ session, players }) {
   const t = now();
-  let nextJoinTime = Math.max(t, ...[...lobby.values()].map((viewer) => viewer.joinedAt));
   for (const player of players) {
     const viewer = lobby.get(player.viewerId);
     if (!viewer) continue;
-    viewer.turnMissed = true;
-    viewer.joinedAt = ++nextJoinTime;
-    viewer.seenAt = t;
+    lobby.delete(player.viewerId);
+    missedTurns.set(player.viewerId, { nick: viewer.nick, at: t });
   }
 
   const settings = liveSettings();
@@ -295,7 +304,6 @@ function advanceAfterPlayerTimeout({ session, players }) {
   if (!target && session?.endedReason !== 'player_timeout') return;
   if (!target && store.data.session?.id === session?.id && session.status === 'ended') {
     const next = [...lobby.values()]
-      .filter((viewer) => !viewer.turnMissed)
       .sort((a, b) => a.joinedAt - b.joinedAt)[0];
     if (!next) return;
     target = startGuestSession({
@@ -310,7 +318,7 @@ function advanceAfterPlayerTimeout({ session, players }) {
   while (target && target.players.length < (target.maxPlayers ?? 1)) {
     const playerIds = new Set(target.players.map((player) => player.viewerId));
     const next = [...lobby.values()]
-      .filter((viewer) => !viewer.turnMissed && !playerIds.has(viewer.id))
+      .filter((viewer) => !playerIds.has(viewer.id))
       .sort((a, b) => a.joinedAt - b.joinedAt)[0];
     if (!next) break;
     const minutes = Math.max(1, Math.ceil(remainingMs(target) / 60_000));
@@ -336,4 +344,5 @@ export function kickViewer(pub) {
 /** Só para testes. */
 export function _resetLobby() {
   lobby.clear();
+  missedTurns.clear();
 }

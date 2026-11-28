@@ -13,13 +13,20 @@ process.env.REQUIRE_ONLINE = '0';
 process.env.MULTIPLAYER = '1';
 
 const { store } = await import('../src/state.js');
-const { startGuestSession, markStreamReady, tick, activeSession } = await import('../src/sessions.js');
+const {
+  startGuestSession,
+  markStreamReady,
+  tick,
+  activeSession,
+  PLAYER_START_TIMEOUT_MS,
+} = await import('../src/sessions.js');
 const {
   _resetLobby,
   adminLive,
   configureLive,
   joinLobby,
   pickViewer,
+  publicLive,
   viewerStatus,
 } = await import('../src/live.js');
 
@@ -58,14 +65,24 @@ test('jogador que não entra em 30 segundos cede a vez automaticamente ao próxi
   const anaPub = adminLive().viewers.find((viewer) => viewer.nick === 'Ana').pub;
   pickViewer(anaPub, 7);
   const firstSession = store.data.session;
+  assert.equal(
+    viewerStatus(ana.viewerId).joinDeadlineAt,
+    firstSession.players[0].selectedAt + PLAYER_START_TIMEOUT_MS,
+  );
 
   const result = tick(firstSession.createdAt + 30_001);
 
   assert.equal(result.playersTimedOut.length, 1);
   assert.equal(store.data.session.customer.name, 'Bia');
   assert.equal(store.data.session.durationMs, 7 * 60_000);
+  assert.equal(viewerStatus(ana.viewerId).joined, false);
   assert.equal(viewerStatus(ana.viewerId).turnMissed, true);
   assert.equal(viewerStatus(bia.viewerId).chosen, true);
+  assert.deepEqual(publicLive().queue, []);
+
+  const rejoinedAna = joinLobby('Ana');
+  assert.notEqual(rejoinedAna.viewerId, ana.viewerId);
+  assert.deepEqual(publicLive().queue, ['Ana']);
 });
 
 test('vaga de multiplayer sem entrada é preenchida sem remover quem já entrou', () => {

@@ -77,7 +77,7 @@ Regras que o sistema aplica:
 
 - Só **uma pessoa joga por vez**.
 - Só é possível escolher com o **host online** (e a **ponte online**, se `REQUIRE_BRIDGE=1`) e o jogo livre.
-- Depois de escolhido, o jogador tem **30 segundos para abrir `/play`**. Se não entrar, o próximo da fila é escolhido automaticamente com os mesmos minutos; se a sala tiver dois jogadores, o lugar que vagou é preenchido sem interromper quem já entrou.
+- Depois de escolhido, o jogador vê uma **contagem regressiva de 30 segundos** para abrir `/play`. Se não entrar, sai da fila e o próximo é escolhido automaticamente com os mesmos minutos; para voltar a esperar, ele deve entrar novamente. No multiplayer, o lugar que vagou é preenchido sem interromper quem já entrou.
 - Se o jogador entrar, mas a imagem não subir em `PROVISION_TIMEOUT_SEC` (180 s), a sessão é cancelada sem consumir tempo.
 - Se as notificações deste site estiverem autorizadas no navegador, a página da live avisa quando chegar sua vez, inclusive em segundo plano.
 - Avisos de 5 min e 1 min antes do fim.

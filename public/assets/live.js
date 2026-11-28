@@ -22,6 +22,7 @@ let viewerId = null;
 let nick = null;
 let shownVideo = null;
 let playingDeadline = null;
+let turnDeadline = null;
 let liveEnabled = false;
 let chatEnabled = false;
 let chatMember = false;
@@ -106,6 +107,18 @@ function renderPlaying(playing) {
 function updatePlayingClock() {
   if (playingDeadline === null) return;
   $('playingTime').textContent = fmtClock(Math.max(0, playingDeadline - Date.now()));
+}
+
+function updateTurnCountdown() {
+  const countdown = $('turnCountdown');
+  if (turnDeadline === null) {
+    countdown.classList.add('hidden');
+    return;
+  }
+  countdown.textContent = t('turnCountdown', {
+    seconds: Math.ceil(Math.max(0, turnDeadline - Date.now()) / 1000),
+  });
+  countdown.classList.remove('hidden');
 }
 
 function clearChatView() {
@@ -228,6 +241,10 @@ async function refresh() {
         if (previouslyMissedTurn) say('');
         previouslyChosen = true;
         previouslyMissedTurn = false;
+        turnDeadline = Number.isFinite(me.joinDeadlineAt)
+          ? Date.now() + Math.max(0, me.joinDeadlineAt - me.serverNow)
+          : null;
+        updateTurnCountdown();
         $('turnCard').classList.remove('hidden');
         $('turnTitle').textContent = t('turnTitle', { nick: me.nick });
         $('turnBtn').href = me.playUrl;
@@ -237,19 +254,32 @@ async function refresh() {
         showRoom(true, me.nick);
       } else {
         previouslyChosen = false;
+        turnDeadline = null;
+        updateTurnCountdown();
         if (me.turnMissed && !previouslyMissedTurn) {
           say(t('turnMissed'));
           notifyInBackground('missedNotificationTitle', 'missedNotificationBody');
         }
         previouslyMissedTurn = Boolean(me.turnMissed);
         $('turnCard').classList.add('hidden');
-        if (me.joined) {
+        if (me.turnMissed) {
+          nick = me.nick ?? nick;
+          if (nick) $('nick').value = nick;
+          $('joinTitle').textContent = t('missedTurnTitle');
+          $('joinBtn').textContent = t('rejoinButton');
+          save();
+          showRoom(false);
+        } else if (me.joined) {
+          $('joinTitle').textContent = t('joinTitle');
+          $('joinBtn').textContent = t('joinButton');
           showRoom(true, me.nick);
         } else {
           // O servidor não conhece mais esse espectador (reinício ou ficou ausente).
           viewerId = null;
           nick = null;
           chatMember = false;
+          $('joinTitle').textContent = t('joinTitle');
+          $('joinBtn').textContent = t('joinButton');
           save();
           showRoom(false);
         }
@@ -257,6 +287,8 @@ async function refresh() {
     } else {
       chatMember = false;
       $('turnCard').classList.add('hidden');
+      turnDeadline = null;
+      updateTurnCountdown();
       showRoom(false);
     }
     updateChatUI();
@@ -273,6 +305,11 @@ $('joinForm').addEventListener('submit', async (event) => {
     const result = await api('/api/live/join', { method: 'POST', body: { nick: $('nick').value } });
     viewerId = result.viewerId;
     nick = result.nick;
+    previouslyChosen = false;
+    previouslyMissedTurn = false;
+    turnDeadline = null;
+    $('joinTitle').textContent = t('joinTitle');
+    $('joinBtn').textContent = t('joinButton');
     save();
     say('');
     await refresh();
@@ -288,6 +325,9 @@ $('leaveBtn').addEventListener('click', async () => {
   viewerId = null;
   nick = null;
   chatMember = false;
+  previouslyChosen = false;
+  previouslyMissedTurn = false;
+  turnDeadline = null;
   clearChatView();
   updateChatUI();
   save();
@@ -332,3 +372,4 @@ refresh();
 setInterval(refresh, 5000);
 setInterval(refreshChat, 5000);
 setInterval(updatePlayingClock, 1000);
+setInterval(updateTurnCountdown, 1000);

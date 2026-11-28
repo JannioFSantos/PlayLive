@@ -44,6 +44,7 @@
         <div>
           <h2 id="turnTitle" style="margin: 0;">🎮 É a sua vez!</h2>
           <p class="muted tiny" style="margin: 6px 0 0;" id="turnHint" data-i18n="turnHint">Entre agora; no celular ou tablet, os comandos aparecem na tela.</p>
+          <p class="tiny hidden" style="margin: 6px 0 0;" id="turnCountdown" role="status" aria-live="polite"></p>
         </div>
         <a class="btn btn-primary btn-lg" id="turnBtn" href="#" data-i18n="playNow">Jogar agora</a>
       </div>
@@ -64,7 +65,7 @@
       <div class="stack">
         <div class="live-frame"><iframe id="player" referrerpolicy="origin" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen title="Live"></iframe></div>
         <div class="card" id="joinCard">
-          <div class="card-head"><h2 data-i18n="joinTitle">Quer jogar?</h2><span class="badge" id="roomBadge">—</span></div>
+          <div class="card-head"><h2 id="joinTitle" data-i18n="joinTitle">Quer jogar?</h2><span class="badge" id="roomBadge">—</span></div>
           <p class="muted tiny" style="margin-top: 0;" data-i18n="joinDescription">
             Entre na sala com um apelido. O dono escolhe quem joga; se for você, o botão de jogar aparece aqui, sem precisar sair da live. Use um controle conectado ou os comandos na tela pelo celular ou tablet.
           </p>

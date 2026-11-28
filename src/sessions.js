@@ -6,7 +6,7 @@ import { id, now } from './util.js';
 import { availability } from './availability.js';
 
 export const ACTIVE_STATUSES = ['provisioning', 'active'];
-const PLAYER_START_TIMEOUT_MS = 30_000;
+export const PLAYER_START_TIMEOUT_MS = 30_000;
 
 export function activeSession(state = store.data) {
   const s = state.session;

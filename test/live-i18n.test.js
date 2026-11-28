@@ -21,3 +21,9 @@ test('traduz o chat próprio nos três idiomas', () => {
   assert.equal(translate('en', 'chatJoin'), 'Join the queue to read and send messages.');
   assert.equal(translate('es', 'chatJoin'), 'Únete a la cola para leer y enviar mensajes.');
 });
+
+test('traduz a contagem regressiva e o convite para entrar novamente na fila', () => {
+  assert.equal(translate('pt', 'turnCountdown', { seconds: 30 }), 'Entre no jogo em até 30 s para não perder a vez.');
+  assert.equal(translate('en', 'rejoinButton'), 'Rejoin the queue');
+  assert.equal(translate('es', 'rejoinButton'), 'Volver a la cola');
+});

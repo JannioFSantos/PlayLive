@@ -80,6 +80,9 @@ test('live: sala por apelido, dono escolhe, escolhido ganha acesso sem pagar', a
   const home = await fetch(base);
   assert.equal(home.headers.get('referrer-policy'), 'no-referrer');
   const homeHtml = await home.text();
+  assert.match(homeHtml, /id="turnCountdown"/);
+  assert.match(homeHtml, /id="joinTitle"/);
+  assert.match(homeHtml, /id="joinBtn"/);
   assert.match(homeHtml, /<iframe id="player" referrerpolicy="origin"/);
   assert.match(homeHtml, /id="chatPanel"/);
   assert.match(homeHtml, /id="chatMessages"/);
