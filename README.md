@@ -66,11 +66,20 @@ O terminal mostra a **senha do painel** e a **chave do host** (se você não as 
 6. O **relógio só começa** quando a imagem do jogo aparece para o jogador. Você pode **somar minutos** (+5, +10) ou **encerrar** a qualquer momento.
 7. Ao acabar o tempo, a sessão encerra sozinha e a vaga fica livre para o próximo.
 
+### Voz dos jogadores no OBS
+
+- No `/play`, o jogador toca em **Ligar microfone** e autoriza o acesso quando o navegador pedir. O botão também desliga e libera o microfone.
+- Com dois jogadores na mesma sessão (`MULTIPLAYER=1`), a voz de cada um é encaminhada pelo host diretamente ao outro jogador. A mídia não passa pelo servidor.
+- O host reproduz a voz recebida na saída de áudio padrão do PC. Para incluí-la na live, configure o OBS para capturar essa saída com **Áudio do desktop/Captura de saída de áudio** ou capture o aplicativo Chrome/Edge que está aberto em `/host`.
+- Se o navegador bloquear a reprodução automática no `/host`, clique em **Ativar reprodução de voz**. Use fones para reduzir eco e confirme o medidor do OBS antes de entrar ao vivo.
+
 Regras que o sistema aplica:
 
 - Só **uma pessoa joga por vez**.
 - Só é possível escolher com o **host online** (e a **ponte online**, se `REQUIRE_BRIDGE=1`) e o jogo livre.
-- Se a imagem não subir em `PROVISION_TIMEOUT_SEC` (180 s), a sessão é cancelada sem consumir tempo.
+- Depois de escolhido, o jogador tem **30 segundos para abrir `/play`**. Se não entrar, o próximo da fila é escolhido automaticamente com os mesmos minutos; se a sala tiver dois jogadores, o lugar que vagou é preenchido sem interromper quem já entrou.
+- Se o jogador entrar, mas a imagem não subir em `PROVISION_TIMEOUT_SEC` (180 s), a sessão é cancelada sem consumir tempo.
+- Se as notificações deste site estiverem autorizadas no navegador, a página da live avisa quando chegar sua vez, inclusive em segundo plano.
 - Avisos de 5 min e 1 min antes do fim.
 - O jogador pode **desistir** quando quiser.
 
@@ -94,7 +103,7 @@ Uma placa de captura só atende **um programa por vez**. Se o OBS (que transmite
 | `ADMIN_PASSWORD` | gerada | Senha do `/admin`. Vazia = gerada e guardada em `data/admin-password.txt`. |
 | `MAX_MINUTES` | `60` | Máximo de minutos por pessoa. |
 | `DEFAULT_MINUTES` | `10` | Valor sugerido no painel. |
-| `PROVISION_TIMEOUT_SEC` | `180` | Prazo para a imagem subir antes de cancelar. Use `300` com captura de janela. |
+| `PROVISION_TIMEOUT_SEC` | `180` | Prazo, após o jogador entrar, para a imagem subir antes de cancelar. Use `300` com captura de janela. |
 | `REQUIRE_ONLINE` | `1` | `0` desliga a trava de PC offline (desenvolvimento). |
 | `REQUIRE_BRIDGE` | `1` | `0` exige só o host (ex.: Xbox com placa de captura, sem ponte). |
 | `MULTIPLAYER` | `0` | `1` permite até dois jogadores remotos na mesma sessão e partida. O segundo entra no tempo restante, sem reiniciar o relógio. |

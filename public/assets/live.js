@@ -28,6 +28,19 @@ let chatMember = false;
 let chatCursor = 0;
 let chatRevision = null;
 let chatInFlight = false;
+let previouslyChosen = false;
+let previouslyMissedTurn = false;
+
+function notifyInBackground(titleKey, bodyKey) {
+  if (!document.hidden) return;
+  document.title = `${t(titleKey)} — ${t('title')}`;
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  try {
+    new Notification(t(titleKey), { body: t(bodyKey) });
+  } catch (err) {
+    console.warn('Não foi possível exibir a notificação da fila.', err);
+  }
+}
 
 function applyLanguage() {
   document.documentElement.lang = language === 'pt' ? 'pt-BR' : language;
@@ -209,6 +222,12 @@ async function refresh() {
       const me = await api(`/api/live/me?v=${encodeURIComponent(viewerId)}`);
       chatMember = Boolean(me.joined || me.chosen);
       if (me.chosen) {
+        if (!previouslyChosen) {
+          notifyInBackground('turnNotificationTitle', 'turnNotificationBody');
+        }
+        if (previouslyMissedTurn) say('');
+        previouslyChosen = true;
+        previouslyMissedTurn = false;
         $('turnCard').classList.remove('hidden');
         $('turnTitle').textContent = t('turnTitle', { nick: me.nick });
         $('turnBtn').href = me.playUrl;
@@ -217,6 +236,12 @@ async function refresh() {
           : t('turnHint');
         showRoom(true, me.nick);
       } else {
+        previouslyChosen = false;
+        if (me.turnMissed && !previouslyMissedTurn) {
+          say(t('turnMissed'));
+          notifyInBackground('missedNotificationTitle', 'missedNotificationBody');
+        }
+        previouslyMissedTurn = Boolean(me.turnMissed);
         $('turnCard').classList.add('hidden');
         if (me.joined) {
           showRoom(true, me.nick);
@@ -296,6 +321,10 @@ $('chatForm').addEventListener('submit', async (event) => {
   } finally {
     $('chatSend').disabled = !chatMember || !chatEnabled;
   }
+});
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) document.title = t('title');
 });
 
 applyLanguage();

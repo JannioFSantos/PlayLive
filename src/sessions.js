@@ -6,6 +6,7 @@ import { id, now } from './util.js';
 import { availability } from './availability.js';
 
 export const ACTIVE_STATUSES = ['provisioning', 'active'];
+const PLAYER_START_TIMEOUT_MS = 30_000;
 
 export function activeSession(state = store.data) {
   const s = state.session;
@@ -133,6 +134,7 @@ export function startGuestSession({ nick, minutes, viewerId, playerCount = 1 }) 
         viewerId,
         name: nick,
         token,
+        selectedAt: t,
         viewer: { connected: false, lastSeenAt: null, connections: 0 },
         inputEnabled: true,
       }],
@@ -176,6 +178,7 @@ export function addGuestPlayer({ nick, minutes, viewerId }) {
       viewerId,
       name: nick,
       token,
+      selectedAt: now(),
       viewer: { connected: false, lastSeenAt: null, connections: 0 },
       inputEnabled: true,
     };
@@ -332,15 +335,48 @@ export function endSession(reason, { sessionID = null, by = 'system' } = {}) {
 export function tick(t = now()) {
   const current = store.data.session;
   if (!current || !ACTIVE_STATUSES.includes(current.status)) {
-    return { warnings: [], sessionEnded: null, provisionFailed: null };
+    return { warnings: [], sessionEnded: null, provisionFailed: null, playersTimedOut: [] };
   }
 
   const warnings = [];
   let sessionEnded = null;
   let provisionFailed = null;
+  let playersTimedOut = [];
 
   store.mutate((state) => {
     const s = state.session;
+
+    playersTimedOut = (s.players ?? []).filter((player) => (
+      Number.isFinite(player.selectedAt)
+      && t - player.selectedAt >= PLAYER_START_TIMEOUT_MS
+      && (player.viewer?.connections ?? 0) === 0
+    ));
+    if (playersTimedOut.length) {
+      const timedOutIds = new Set(playersTimedOut.map((player) => player.viewerId));
+      s.players = (s.players ?? []).filter((player) => !timedOutIds.has(player.viewerId));
+      for (const player of playersTimedOut) {
+        pushEvent(state, 'session.player_timeout', {
+          sessionID: s.id,
+          nick: player.name,
+          slot: player.slot,
+          timeoutSec: PLAYER_START_TIMEOUT_MS / 1000,
+        }, 'warn');
+      }
+
+      if (s.players.length) {
+        s.customer = { name: s.players.map((player) => player.name).join(' + ') };
+      } else {
+        s.status = 'ended';
+        s.endedReason = 'player_timeout';
+        s.endedAt = t;
+        s.streamReady = false;
+        pushEvent(state, 'session.ended', {
+          sessionID: s.id,
+          reason: 'player_timeout',
+        }, 'warn');
+        sessionEnded = s;
+      }
+    }
 
     if (s.status === 'active') {
       const left = s.endsAt - t;
@@ -376,11 +412,16 @@ export function tick(t = now()) {
   });
 
   for (const w of warnings) bus.emit('session:warning', w);
-  if (sessionEnded) bus.emit('session:ended', { session: sessionEnded, reason: 'time_up' });
+  if (sessionEnded) {
+    bus.emit('session:ended', { session: sessionEnded, reason: sessionEnded.endedReason });
+  }
   if (provisionFailed) {
     bus.emit('session:ended', { session: provisionFailed, reason: 'provision_timeout' });
   }
-  if (warnings.length || sessionEnded || provisionFailed) bus.emit('state:changed');
+  if (playersTimedOut.length) {
+    bus.emit('session:players_timed_out', { session: store.data.session, players: playersTimedOut });
+  }
+  if (warnings.length || sessionEnded || provisionFailed || playersTimedOut.length) bus.emit('state:changed');
 
-  return { warnings, sessionEnded, provisionFailed };
+  return { warnings, sessionEnded, provisionFailed, playersTimedOut };
 }

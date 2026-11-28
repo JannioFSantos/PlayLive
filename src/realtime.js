@@ -340,6 +340,7 @@ export function attachRealtime(server) {
           if (!ACTIVE_STATUSES.includes(session.status)) {
             return fail(client, 'session_ended', 'Esta sessão já terminou.', {
               status: session.status,
+              reason: session.endedReason,
             });
           }
 

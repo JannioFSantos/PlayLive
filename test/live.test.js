@@ -91,6 +91,11 @@ test('live: sala por apelido, dono escolhe, escolhido ganha acesso sem pagar', a
   assert.match(homeHtml, /id="queueList"/);
   const adminHtml = await (await fetch(`${base}/admin`)).text();
   assert.match(adminHtml, /id="liveStop"[^>]*>STOP<\/button>/);
+  const playHtml = await (await fetch(`${base}/play`)).text();
+  assert.match(playHtml, /id="btnMic"/);
+  const hostHtml = await (await fetch(`${base}/host`)).text();
+  assert.match(hostHtml, /id="voiceStatus"/);
+  assert.match(hostHtml, /id="btnVoiceOutput"/);
 
   const login = await call('/api/admin/login', { method: 'POST', body: { password: PASSWORD } });
   const cookie = login.headers.get('set-cookie').split(';')[0];

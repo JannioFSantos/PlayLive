@@ -5,7 +5,14 @@ import { ApiError, bad, conflict, notFound } from './errors.js';
 import { now } from './util.js';
 import { config } from './config.js';
 import { assertOnline } from './availability.js';
-import { ACTIVE_STATUSES, addGuestPlayer, remainingMs, slotStatus, startGuestSession } from './sessions.js';
+import {
+  ACTIVE_STATUSES,
+  activeSession,
+  addGuestPlayer,
+  remainingMs,
+  slotStatus,
+  startGuestSession,
+} from './sessions.js';
 import { liveChatStatus, resetLiveChat } from './live-chat.js';
 
 /**
@@ -145,6 +152,7 @@ export function joinLobby(nickInput) {
     nick,
     joinedAt: t,
     seenAt: t,
+    turnMissed: false,
   };
   lobby.set(viewer.id, viewer);
   bus.emit('state:changed');
@@ -202,6 +210,7 @@ export function viewerStatus(viewerId, t = now()) {
       playUrl: `/play.html?s=${encodeURIComponent(player.token)}`,
       sessionStatus: session.status,
       endsAt: session.endsAt,
+      turnMissed: false,
     };
   }
   return {
@@ -209,6 +218,7 @@ export function viewerStatus(viewerId, t = now()) {
     enabled: Boolean(settings.enabled),
     chosen: false,
     nick: viewer?.nick ?? null,
+    turnMissed: Boolean(viewer?.turnMissed),
   };
 }
 
@@ -249,6 +259,7 @@ export function pickViewer(pub, minutesInput, playerCountInput = 1) {
   if (slot.status !== 'free') {
     const result = addGuestPlayer({ nick: viewer.nick, minutes, viewerId: viewer.id });
     if (!result) throw conflict('A sessão já está cheia ou não aceita outro jogador.', 'slot_busy');
+    viewer.turnMissed = false;
     return {
       nick: viewer.nick,
       minutes: Math.ceil(remainingMs(result.session) / 60_000),
@@ -262,8 +273,54 @@ export function pickViewer(pub, minutesInput, playerCountInput = 1) {
     playerCount,
   });
   if (!session) throw conflict('O Xbox ficou ocupado.', 'slot_busy');
+  viewer.turnMissed = false;
   return { nick: viewer.nick, minutes, playerSlot: 1, playerCount };
 }
+
+function advanceAfterPlayerTimeout({ session, players }) {
+  const t = now();
+  let nextJoinTime = Math.max(t, ...[...lobby.values()].map((viewer) => viewer.joinedAt));
+  for (const player of players) {
+    const viewer = lobby.get(player.viewerId);
+    if (!viewer) continue;
+    viewer.turnMissed = true;
+    viewer.joinedAt = ++nextJoinTime;
+    viewer.seenAt = t;
+  }
+
+  const settings = liveSettings();
+  if (!settings.enabled || !settings.videoId) return;
+
+  let target = activeSession();
+  if (!target && session?.endedReason !== 'player_timeout') return;
+  if (!target && store.data.session?.id === session?.id && session.status === 'ended') {
+    const next = [...lobby.values()]
+      .filter((viewer) => !viewer.turnMissed)
+      .sort((a, b) => a.joinedAt - b.joinedAt)[0];
+    if (!next) return;
+    target = startGuestSession({
+      nick: next.nick,
+      minutes: Math.max(1, Math.ceil(session.durationMs / 60_000)),
+      viewerId: next.id,
+      playerCount: session.maxPlayers ?? 1,
+    });
+    if (!target) return;
+  }
+
+  while (target && target.players.length < (target.maxPlayers ?? 1)) {
+    const playerIds = new Set(target.players.map((player) => player.viewerId));
+    const next = [...lobby.values()]
+      .filter((viewer) => !viewer.turnMissed && !playerIds.has(viewer.id))
+      .sort((a, b) => a.joinedAt - b.joinedAt)[0];
+    if (!next) break;
+    const minutes = Math.max(1, Math.ceil(remainingMs(target) / 60_000));
+    const added = addGuestPlayer({ nick: next.nick, minutes, viewerId: next.id });
+    if (!added) break;
+    target = added.session;
+  }
+}
+
+bus.on('session:players_timed_out', advanceAfterPlayerTimeout);
 
 export function kickViewer(pub) {
   for (const [key, v] of lobby) {

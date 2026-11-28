@@ -22,6 +22,10 @@ let playerSlot = 1;
 let ws = null;
 let pc = null;
 let remoteStream = null;
+const remoteAudioElements = new Map();
+let audioPlaybackEnabled = false;
+let microphoneStream = null;
+let microphoneSender = null;
 let ended = false;
 let controllerEnabled = true;
 let hostOnline = false;
@@ -74,6 +78,7 @@ async function boot() {
     config = configData;
     iceServers = configData.iceServers ?? [];
     applySession(sessionData);
+    $('btnMic').disabled = ended;
   } catch (err) {
     if (err.code === 'invalid_token') {
       fatal('Sessão não encontrada', 'Este link expirou ou a sessão já foi encerrada. Se você tinha tempo restante, fale com o suporte.');
@@ -266,7 +271,7 @@ async function handleMessage(msg) {
       break;
 
     case 'error':
-      if (msg.code === 'session_ended') showEnded('time_up');
+      if (msg.code === 'session_ended') showEnded(msg.reason || 'time_up');
       else if (msg.code === 'invalid_token') fatal('Sessão inválida', msg.message);
       else toast(msg.message || 'Erro de conexão.', 'danger');
       break;
@@ -296,12 +301,14 @@ async function handleOffer(offer) {
     };
 
     pc.ontrack = (event) => {
+      if (event.track.kind === 'audio') {
+        attachRemoteAudio(event.track);
+        return;
+      }
       const stream = event.streams[0] ?? new MediaStream([event.track]);
       remoteStream = stream;
       const video = $('video');
-      if (video.srcObject !== stream) {
-        video.srcObject = stream;
-      }
+      if (video.srcObject !== stream) video.srcObject = stream;
       if (!session?.streamReady) session = { ...session, streamReady: true };
       tryPlay();
     };
@@ -321,6 +328,28 @@ async function handleOffer(offer) {
     };
 
     await pc.setRemoteDescription(offer);
+    const audioTransceivers = pc.getTransceivers()
+      .filter((transceiver) => transceiver.receiver.track.kind === 'audio');
+    if (audioTransceivers[0]) {
+      audioTransceivers[0].direction = 'sendrecv';
+      for (const transceiver of audioTransceivers.slice(1)) {
+        transceiver.direction = 'recvonly';
+      }
+      microphoneSender = audioTransceivers[0].sender;
+      const microphoneTrack = microphoneStream?.getAudioTracks()[0];
+      if (microphoneTrack) {
+        try {
+          await microphoneSender.replaceTrack(microphoneTrack);
+        } catch (err) {
+          console.warn('Não foi possível enviar o microfone nesta conexão.', err);
+          microphoneStream.getTracks().forEach((track) => track.stop());
+          microphoneStream = null;
+          microphoneSender = null;
+          updateMicrophoneButton(false);
+          toast('Não foi possível conectar o microfone. Tente ligá-lo novamente.', 'danger');
+        }
+      }
+    }
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
     ws?.send({ type: 'answer', payload: answer });
@@ -342,6 +371,27 @@ function closePeer() {
     /* ignore */
   }
   pc = null;
+  microphoneSender = null;
+  for (const audio of remoteAudioElements.values()) {
+    audio.pause();
+    audio.srcObject = null;
+  }
+  remoteAudioElements.clear();
+}
+
+function attachRemoteAudio(track) {
+  const audio = new Audio();
+  audio.autoplay = true;
+  audio.playsInline = true;
+  audio.muted = !audioPlaybackEnabled;
+  audio.srcObject = new MediaStream([track]);
+  remoteAudioElements.set(track.id, audio);
+  track.onended = () => {
+    audio.pause();
+    audio.srcObject = null;
+    remoteAudioElements.delete(track.id);
+  };
+  audio.play().catch(() => {});
 }
 
 function tryPlay() {
@@ -357,6 +407,95 @@ function tryPlay() {
     return;
   }
   video.play().catch(() => {});
+}
+
+async function enableAudioPlayback() {
+  audioPlaybackEnabled = true;
+  const video = $('video');
+  video.muted = false;
+  const playback = [...remoteAudioElements.values()].map((audio) => {
+    audio.muted = false;
+    return audio.play();
+  });
+  if (video.srcObject) playback.push(video.play());
+  try {
+    await Promise.all(playback);
+    $('btnSound').classList.add('hidden');
+    toast('Som ativado.', 'green', 2000);
+  } catch {
+    toast('Seu navegador bloqueou o áudio. Toque novamente.', 'warn');
+  }
+}
+
+function updateMicrophoneButton(enabled) {
+  const button = $('btnMic');
+  button.textContent = enabled ? 'Desligar microfone' : 'Ligar microfone';
+  button.classList.toggle('btn-primary', enabled);
+  button.setAttribute('aria-pressed', String(enabled));
+}
+
+async function toggleMicrophone() {
+  if (ended) return;
+  const button = $('btnMic');
+  button.disabled = true;
+
+  if (microphoneStream) {
+    const stream = microphoneStream;
+    microphoneStream = null;
+    try {
+      await microphoneSender?.replaceTrack(null);
+    } catch (err) {
+      console.warn('Não foi possível interromper o envio do microfone.', err);
+    }
+    stream.getTracks().forEach((track) => track.stop());
+    microphoneSender = null;
+    updateMicrophoneButton(false);
+    button.disabled = false;
+    return;
+  }
+
+  try {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      throw new Error('Este navegador não permite acessar o microfone.');
+    }
+    microphoneStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+        channelCount: 1,
+      },
+      video: false,
+    });
+
+    if (pc) {
+      const audioTransceiver = pc.getTransceivers()
+        .find((transceiver) => transceiver.receiver.track.kind === 'audio');
+      if (!audioTransceiver) {
+        throw new Error('A conexão ainda não oferece suporte à voz. Recarregue o player.');
+      }
+      audioTransceiver.direction = 'sendrecv';
+      microphoneSender = audioTransceiver.sender;
+      await microphoneSender.replaceTrack(microphoneStream.getAudioTracks()[0]);
+    }
+    updateMicrophoneButton(true);
+    toast('Sua voz será ouvida pelo outro jogador e transmitida na live. Use fones para evitar eco.', 'green', 5000);
+  } catch (err) {
+    microphoneStream?.getTracks().forEach((track) => track.stop());
+    microphoneStream = null;
+    microphoneSender = null;
+    updateMicrophoneButton(false);
+    toast(err.message || 'Não foi possível acessar o microfone.', 'danger', 6000);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function stopMicrophone() {
+  microphoneStream?.getTracks().forEach((track) => track.stop());
+  microphoneStream = null;
+  microphoneSender = null;
+  updateMicrophoneButton(false);
 }
 
 /* ------------------------------------------------------------------ */
@@ -410,6 +549,8 @@ function showEnded(reason) {
   releaseTouchControls();
   $('shell').classList.remove('touch-ready');
   ended = true;
+  $('btnMic').disabled = true;
+  stopMicrophone();
   closePeer();
   $('video').srcObject = null;
   ws?.close();
@@ -417,6 +558,7 @@ function showEnded(reason) {
   const messages = {
     time_up: ['Tempo esgotado', 'Seu tempo de jogo terminou. O Xbox já está livre para outra pessoa.'],
     forfeited: ['Você desistiu', 'A sessão foi encerrada e o Xbox ficou livre para a próxima pessoa.'],
+    player_timeout: ['Prazo encerrado', 'Você não entrou em até 30 segundos e sua vez passou para a próxima pessoa. Volte à live para entrar novamente na fila.'],
     provision_timeout: ['Não conseguimos iniciar', 'A transmissão não ficou pronta a tempo e seu relógio nem começou. Volte para a live e peça para ser escolhido de novo.'],
     admin: ['Sessão encerrada', 'O operador encerrou esta sessão.'],
     admin_reset: ['Sessão encerrada', 'O operador reiniciou o estado da máquina.'],
@@ -488,17 +630,10 @@ function tick() {
 
 function bindUI() {
   $('btnSound').addEventListener('click', async () => {
-    const video = $('video');
-    video.muted = false;
-    try {
-      await video.play();
-      $('btnSound').classList.add('hidden');
-      toast('Som ativado.', 'green', 2000);
-    } catch {
-      toast('Seu navegador bloqueou o áudio. Toque novamente.', 'warn');
-    }
+    await enableAudioPlayback();
   });
 
+  $('btnMic').addEventListener('click', toggleMicrophone);
   $('btnForfeit').addEventListener('click', openForfeit);
 
   $('btnFull').addEventListener('click', () => {
@@ -529,15 +664,13 @@ function bindUI() {
     }
   });
   video.addEventListener('click', () => {
-    if (video.muted) {
-      video.muted = false;
-      $('btnSound').classList.add('hidden');
-    }
+    if (video.muted) enableAudioPlayback();
     poke();
   });
 
   window.addEventListener('beforeunload', () => {
     // Sair da página NÃO encerra a sessão: o tempo continua, por regra.
+    stopMicrophone();
     ws?.close();
   });
 }

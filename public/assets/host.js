@@ -13,6 +13,9 @@ let key = '';
 let stream = null;
 const peers = new Map();
 const inputChannels = new Map();
+const voiceSenders = new Map();
+const remoteVoiceTracks = new Map();
+const remoteVoiceAudio = new Map();
 let session = null;
 const viewerSlots = new Set();
 let readySent = false;
@@ -25,6 +28,7 @@ let analyser = null;
 let meterRaf = 0;
 let statsTimer = null;
 let lastStats = null;
+let voiceOutputEnabled = true;
 
 // Comandos por P2P: player ──DataChannel──> este host ──ws://127.0.0.1──> ponte.
 const params = new URLSearchParams(location.search);
@@ -607,6 +611,10 @@ async function publish(slot = 1) {
   log(`Negociando vídeo com o player ${slot}…`);
   const pc = new RTCPeerConnection({ iceServers });
   peers.set(slot, pc);
+  const gameAudioTransceiver = pc.addTransceiver('audio', { direction: 'sendrecv' });
+  const voiceTransceiver = pc.addTransceiver('audio', { direction: 'sendonly' });
+  voiceSenders.set(slot, voiceTransceiver.sender);
+  syncForwardedVoice(slot);
 
   // Canal de comandos: não ordenado e sem reenvio (comportamento de UDP).
   // Um estado antigo de botão não vale a pena ser reenviado.
@@ -641,10 +649,22 @@ async function publish(slot = 1) {
     updateUI();
   };
 
-  for (const track of stream.getTracks()) {
+  pc.ontrack = (event) => {
+    if (peers.get(slot) !== pc || event.track.kind !== 'audio') return;
+    receiveVoiceTrack(slot, event.track);
+  };
+
+  const audioTrack = stream.getAudioTracks()[0];
+  if (audioTrack) {
+    try {
+      await gameAudioTransceiver.sender.replaceTrack(audioTrack);
+    } catch (err) {
+      log(`Falha ao adicionar áudio do jogo: ${err.message}`, 'error');
+    }
+  }
+  for (const track of stream.getVideoTracks()) {
     const sender = pc.addTrack(track, stream);
-    if (track.kind === 'video') await tuneSender(sender, true);
-    if (track.kind === 'audio') await tuneSender(sender, false);
+    await tuneSender(sender, true);
   }
 
   try {
@@ -676,8 +696,10 @@ async function tuneSender(sender, isVideo) {
 function closePeer(slot) {
   const channel = inputChannels.get(slot);
   const peer = peers.get(slot);
+  clearReceivedVoice(slot);
   inputChannels.delete(slot);
   peers.delete(slot);
+  voiceSenders.delete(slot);
   lastInputSeq.delete(slot);
   if (channel) {
     channel.onclose = null;
@@ -695,6 +717,75 @@ function closePeer(slot) {
   }
   if (peers.size === 0) stopStats();
   updateUI();
+}
+
+function receiveVoiceTrack(slot, track) {
+  clearReceivedVoice(slot);
+  remoteVoiceTracks.set(slot, track);
+
+  const audio = new Audio();
+  audio.autoplay = true;
+  audio.playsInline = true;
+  audio.srcObject = new MediaStream([track]);
+  remoteVoiceAudio.set(slot, audio);
+  track.onended = () => clearReceivedVoice(slot);
+  syncForwardedVoice();
+  updateVoiceStatus();
+  playRemoteVoice(slot, audio);
+}
+
+function clearReceivedVoice(slot) {
+  const track = remoteVoiceTracks.get(slot);
+  if (track) track.onended = null;
+  remoteVoiceTracks.delete(slot);
+
+  const audio = remoteVoiceAudio.get(slot);
+  if (audio) {
+    audio.pause();
+    audio.srcObject = null;
+  }
+  remoteVoiceAudio.delete(slot);
+
+  for (const [targetSlot, sender] of voiceSenders) {
+    if (targetSlot !== slot && sender.track === track) {
+      sender.replaceTrack(null).catch((err) => {
+        log(`Falha ao parar o retorno de voz para o player ${targetSlot}: ${err.message}`, 'warn');
+      });
+    }
+  }
+  syncForwardedVoice();
+  updateVoiceStatus();
+}
+
+function syncForwardedVoice(targetSlot = null) {
+  for (const [slot, sender] of voiceSenders) {
+    if (targetSlot !== null && targetSlot !== slot) continue;
+    const sourceTrack = [...remoteVoiceTracks]
+      .find(([sourceSlot, track]) => sourceSlot !== slot && track.readyState === 'live')?.[1] ?? null;
+    if (sender.track === sourceTrack) continue;
+    sender.replaceTrack(sourceTrack).catch((err) => {
+      log(`Falha ao encaminhar voz para o player ${slot}: ${err.message}`, 'warn');
+    });
+  }
+}
+
+function updateVoiceStatus() {
+  const status = $('voiceStatus');
+  if (!status) return;
+  status.textContent = remoteVoiceTracks.size
+    ? `recebendo voz de ${remoteVoiceTracks.size} player${remoteVoiceTracks.size === 1 ? '' : 's'}`
+    : 'aguardando voz';
+}
+
+function playRemoteVoice(slot, audio) {
+  if (!voiceOutputEnabled) return;
+  audio.play().then(() => {
+    $('btnVoiceOutput').classList.add('hidden');
+  }).catch((err) => {
+    voiceOutputEnabled = false;
+    $('btnVoiceOutput').classList.remove('hidden');
+    log(`Reprodução de voz bloqueada; ative o áudio para o OBS capturar: ${err.message}`, 'warn');
+  });
 }
 
 function closePeers() {
@@ -854,6 +945,18 @@ function log(message, level = 'info') {
 
 function bindUI() {
   $('btnConnect').addEventListener('click', () => connect($('hostKeyInput').value));
+  $('btnVoiceOutput').addEventListener('click', async () => {
+    voiceOutputEnabled = true;
+    try {
+      await Promise.all([...remoteVoiceAudio].map(([, audio]) => audio.play()));
+      $('btnVoiceOutput').classList.add('hidden');
+      log('Reprodução da voz dos jogadores ativada para a saída de áudio do PC.');
+    } catch (err) {
+      voiceOutputEnabled = false;
+      log(`Não foi possível reproduzir a voz: ${err.message}`, 'error');
+      toast('Não foi possível ativar o áudio de voz. Verifique a saída de som do PC.', 'danger');
+    }
+  });
 
   $('hostKeyInput').addEventListener('keydown', (event) => {
     if (event.key === 'Enter') connect($('hostKeyInput').value);
