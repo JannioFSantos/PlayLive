@@ -68,6 +68,11 @@
                 <span class="grow"></span>
                 <span class="badge" id="liveCount">0 na sala</span>
               </div>
+              <div class="row" id="playerCountOptions">
+                <span class="muted tiny">Jogadores remotos</span>
+                <label class="tiny"><input type="radio" name="playerCount" id="playerCount1" value="1" checked /> 1 player WebRTC</label>
+                <label class="tiny"><input type="radio" name="playerCount" id="playerCount2" value="2" /> 2 players WebRTC</label>
+              </div>
               <div id="liveViewers" class="list"></div>
               <div class="row">
                 <span class="badge" id="liveChatStatus">Chat pausado</span>
@@ -98,6 +103,7 @@
                 <div class="kv"><span class="k">Transmissão pronta</span><span class="v" id="sessionStream">—</span></div>
               </div>
             </div>
+            <div class="list mt-4" id="sessionPlayers"></div>
             <div class="row mt-4" id="sessionActions">
               <button class="btn btn-ghost btn-sm" data-action="extend" data-minutes="5">+5 min</button>
               <button class="btn btn-ghost btn-sm" data-action="extend" data-minutes="10">+10 min</button>

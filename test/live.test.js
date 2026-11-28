@@ -386,9 +386,10 @@ test('live: modo multiplayer cria dois jogadores com slots e links separados', a
   const anaPub = overview.live.viewers.find((v) => v.nick === 'Ana').pub;
   const biaPub = overview.live.viewers.find((v) => v.nick === 'Bia').pub;
 
-  const first = await admin('live_pick', { pub: anaPub, minutes: 10 });
+  const first = await admin('live_pick', { pub: anaPub, minutes: 10, playerCount: 2 });
   assert.equal(first.status, 200);
   assert.equal(first.data.playerSlot, 1);
+  assert.equal(first.data.playerCount, 2);
 
   const second = await admin('live_pick', { pub: biaPub, minutes: 10 });
   assert.equal(second.status, 200);
@@ -443,6 +444,30 @@ test('live: modo multiplayer cria dois jogadores com slots e links separados', a
   const routedInputs = bridge.received.filter((message) => message.type === 'input');
   assert.deepEqual(routedInputs.map((message) => message.payload.playerSlot), [1, 2]);
 
+  const disableControl = await admin('player_control', { slot: 2, enabled: false });
+  assert.equal(disableControl.data.enabled, false);
+  await until(() => viewerBia.received.some(
+    (message) => message.type === 'player:control' && message.enabled === false,
+  ));
+  await until(() => bridge.received.some(
+    (message) => message.type === 'player:control' && message.playerSlot === 2 && !message.enabled,
+  ));
+  assert.equal((await call(`/api/session?s=${encodeURIComponent(tokenBia)}`)).data.controllerEnabled, false);
+  viewerBia.ws.send(JSON.stringify({
+    type: 'input',
+    payload: { axes: [0, 0, 0, 0], buttons: [[1, 1]] },
+  }));
+  await sleep(100);
+  assert.equal(bridge.received.filter((message) => message.type === 'input').length, 2);
+
+  await admin('player_control', { slot: 2, enabled: true });
+  await until(() => viewerBia.received.some(
+    (message) => message.type === 'player:control' && message.enabled === true,
+  ));
+  await until(() => bridge.received.some(
+    (message) => message.type === 'player:control' && message.playerSlot === 2 && message.enabled,
+  ));
+
   const biaForfeit = await call('/api/session/forfeit', {
     method: 'POST',
     body: { token: tokenBia, confirm: true },
@@ -458,5 +483,17 @@ test('live: modo multiplayer cria dois jogadores com slots e links separados', a
   });
   assert.equal(anaForfeit.data.ended, true);
   assert.equal((await call(`/api/session?s=${encodeURIComponent(tokenAna)}`)).status, 401);
+
+  await admin('live_stop');
+  await admin('live_set', { url: 'dQw4w9WgXcQ', enabled: true });
+  const onePlayer = (await call('/api/live/join', { method: 'POST', body: { nick: 'Solo' } })).data;
+  const blockedSecond = (await call('/api/live/join', { method: 'POST', body: { nick: 'Aguardando' } })).data;
+  const freshOverview = (await call('/api/admin/overview', { cookie })).data;
+  const soloPub = freshOverview.live.viewers.find((viewer) => viewer.nick === 'Solo').pub;
+  const waitingPub = freshOverview.live.viewers.find((viewer) => viewer.nick === 'Aguardando').pub;
+  const onePlayerPick = await admin('live_pick', { pub: soloPub, minutes: 5, playerCount: 1 });
+  assert.equal(onePlayerPick.data.playerCount, 1);
+  assert.equal((await admin('live_pick', { pub: waitingPub, minutes: 5 })).status, 409);
+  assert.ok(onePlayer.viewerId && blockedSecond.viewerId);
   child.kill();
 });

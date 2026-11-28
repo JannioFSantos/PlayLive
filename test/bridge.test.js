@@ -336,7 +336,7 @@ test('ponte mantém estados independentes para os dois controles virtuais', asyn
   const overview = await fetch(`${BASE}/api/admin/overview`, { headers: { Cookie: cookie } }).then((res) => res.json());
   const anaPub = overview.live.viewers.find((viewer) => viewer.nick === 'Slot A').pub;
   const biaPub = overview.live.viewers.find((viewer) => viewer.nick === 'Slot B').pub;
-  await admin({ action: 'live_pick', pub: anaPub, minutes: 5 });
+  await admin({ action: 'live_pick', pub: anaPub, minutes: 5, playerCount: 2 });
   await admin({ action: 'live_pick', pub: biaPub, minutes: 5 });
 
   const meAna = await api(`/api/live/me?v=${ana.data.viewerId}`);

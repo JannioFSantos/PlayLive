@@ -23,6 +23,7 @@ let ws = null;
 let pc = null;
 let remoteStream = null;
 let ended = false;
+let controllerEnabled = true;
 let hostOnline = false;
 let iceServers = [];
 let statsTimer = null;
@@ -153,6 +154,9 @@ function applySession(next) {
 
   const previous = session;
   session = next;
+  if (typeof next.controllerEnabled === 'boolean') {
+    setControllerEnabled(next.controllerEnabled);
+  }
 
   if (previous?.endsAt && next.endsAt && next.endsAt > previous.endsAt) {
     const gained = Math.round((next.endsAt - previous.endsAt) / 60000);
@@ -179,6 +183,17 @@ function updateHud() {
   $('hoursText').textContent = session.players?.length > 1
     ? `J${session.playerSlot} · ${duration}`
     : duration;
+}
+
+function setControllerEnabled(enabled) {
+  const changed = controllerEnabled !== enabled;
+  controllerEnabled = enabled;
+  const notice = $('adminControlNotice');
+  notice.classList.toggle('hidden', enabled);
+  notice.textContent = enabled
+    ? 'Controle reconectado pelo ADM'
+    : 'Controle desconectado pelo ADM';
+  if (changed && enabled) toast('Controle reconectado pelo ADM.', 'green');
 }
 
 /* ------------------------------------------------------------------ */
@@ -244,6 +259,10 @@ async function handleMessage(msg) {
 
     case 'input:pong':
       recordProbe('w', msg.id);
+      break;
+
+    case 'player:control':
+      setControllerEnabled(msg.enabled === true);
       break;
 
     case 'error':
@@ -698,6 +717,7 @@ function updateRouteLabel() {
 }
 
 function transmit(payload, route) {
+  if (!controllerEnabled) return false;
   const routedPayload = { ...payload, playerSlot };
   if (route === 'p2p') {
     if (inputDC.bufferedAmount > 8192) return false;
@@ -714,7 +734,7 @@ function transmit(payload, route) {
 }
 
 function sendInput(payload) {
-  if (ended) return;
+  if (ended || !controllerEnabled) return;
   const route = chooseRoute();
   if (route !== currentRoute) {
     currentRoute = route;

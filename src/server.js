@@ -18,6 +18,7 @@ import {
   slotStatus,
   tick,
   forfeitGuestPlayer,
+  setPlayerControl,
 } from './sessions.js';
 import {
   ADMIN_COOKIE,
@@ -254,8 +255,10 @@ app.get('/api/admin/overview', (req, res) => {
                 slot: player.slot,
                 name: player.name,
                 viewerConnected: Boolean(player.viewer?.connected),
+                inputEnabled: player.inputEnabled !== false,
               }))
             : undefined,
+          maxPlayers: config.multiplayer ? (s.maxPlayers ?? 1) : 1,
           playUrl: `${config.baseUrl}/play.html?s=${encodeURIComponent(s.token)}`,
         }
       : null,
@@ -266,6 +269,8 @@ app.get('/api/admin/overview', (req, res) => {
       defaultMinutes: config.defaultGuestMinutes,
       provisionTimeoutSec: config.provisionTimeoutSec,
       xboxPowerConfigured: Boolean(config.xboxPowerOnCmd || config.xboxPowerOffCmd),
+      multiplayer: config.multiplayer,
+      maxRemotePlayers: config.maxRemotePlayers,
     },
   });
 });
@@ -301,9 +306,16 @@ app.post('/api/admin/action', asyncH(async (req, res) => {
     }
 
     case 'live_pick': {
-      const picked = pickViewer(payload.pub, payload.minutes);
+      const picked = pickViewer(payload.pub, payload.minutes, payload.playerCount ?? 1);
       bus.emit('state:changed');
       return res.json({ ok: true, ...picked });
+    }
+
+    case 'player_control': {
+      const slot = Math.trunc(Number(payload.slot));
+      if (![1, 2].includes(slot)) throw bad('Slot de jogador inválido.', 'invalid_player_slot');
+      const control = setPlayerControl(slot, payload.enabled);
+      return res.json({ ok: true, ...control });
     }
 
     case 'live_kick':

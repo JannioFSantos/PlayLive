@@ -35,6 +35,7 @@ export function publicSession(session, t = now()) {
     slot: player.slot,
     name: player.name,
     connected: Boolean(player.viewer?.connected),
+    inputEnabled: player.inputEnabled !== false,
   }));
   return {
     status: session.status,
@@ -45,7 +46,9 @@ export function publicSession(session, t = now()) {
     minutes: Math.round(session.durationMs / 60_000),
     failedProvision: session.status === 'provisioning'
       && t - session.createdAt > config.provisionTimeoutSec * 1000,
-    ...(config.multiplayer ? { players, playerCount: players.length } : {}),
+    ...(config.multiplayer
+      ? { players, playerCount: players.length, maxPlayers: session.maxPlayers ?? 1 }
+      : {}),
   };
 }
 
@@ -87,8 +90,10 @@ export function sessionView(tokenValue) {
         slot: item.slot,
         name: item.name,
         connected: Boolean(item.viewer?.connected),
+        inputEnabled: item.inputEnabled !== false,
       })),
     } : {}),
+    controllerEnabled: player?.inputEnabled !== false,
     startedAt: session.startedAt,
     endsAt: session.endsAt,
     remainingMs: remainingMs(session, t),
@@ -104,7 +109,7 @@ export function sessionView(tokenValue) {
  * O dono escolheu um espectador: cria a sessão com tempo fixo em minutos.
  * O relógio só começa quando o host avisa que a transmissão subiu.
  */
-export function startGuestSession({ nick, minutes, viewerId }) {
+export function startGuestSession({ nick, minutes, viewerId, playerCount = 1 }) {
   const t = now();
   return store.mutate((state) => {
     if (activeSession(state)) return null;
@@ -119,6 +124,7 @@ export function startGuestSession({ nick, minutes, viewerId }) {
       guestViewerId: viewerId,
       durationMs: minutes * 60_000,
       customer: { name: nick },
+      maxPlayers: playerCount,
       warningsSent: [],
       streamReady: false,
       viewer: { connected: false, lastSeenAt: null, connections: 0 },
@@ -128,6 +134,7 @@ export function startGuestSession({ nick, minutes, viewerId }) {
         name: nick,
         token,
         viewer: { connected: false, lastSeenAt: null, connections: 0 },
+        inputEnabled: true,
       }],
       endedAt: null,
       endedReason: null,
@@ -153,18 +160,24 @@ export function addGuestPlayer({ nick, minutes, viewerId }) {
         name: session.customer.name,
         token: session.token,
         viewer: session.viewer ?? { connected: false, lastSeenAt: null, connections: 0 },
+        inputEnabled: true,
       }];
     }
-    if (session.players?.length >= config.maxRemotePlayers) return null;
+    const playerLimit = session.maxPlayers ?? 1;
+    if (session.players.length >= playerLimit) return null;
     if (session.players?.some((player) => player.viewerId === viewerId)) return null;
+    const slot = Array.from({ length: playerLimit }, (_, index) => index + 1)
+      .find((candidate) => !session.players.some((player) => player.slot === candidate));
+    if (!slot) return null;
 
     const token = id('tok_') + id('');
     const player = {
-      slot: 2,
+      slot,
       viewerId,
       name: nick,
       token,
       viewer: { connected: false, lastSeenAt: null, connections: 0 },
+      inputEnabled: true,
     };
     session.players = [...(session.players ?? []), player];
     session.customer = { name: `${session.customer.name} + ${nick}` };
@@ -177,6 +190,36 @@ export function addGuestPlayer({ nick, minutes, viewerId }) {
     bus.emit('session:player_added', { session, player });
     return { session, player };
   });
+}
+
+/** Bloqueia ou reativa a entrada de controle de um slot individual. */
+export function setPlayerControl(slot, enabled) {
+  if (typeof enabled !== 'boolean') {
+    throw new ApiError(400, 'invalid_player_control', 'Estado de controle inválido.');
+  }
+  const result = store.mutate((state) => {
+    const session = state.session;
+    if (!session || !ACTIVE_STATUSES.includes(session.status)) {
+      throw new ApiError(409, 'no_active_session', 'Não há sessão ativa.');
+    }
+    const player = (session.players ?? []).find((item) => item.slot === slot);
+    if (!player) throw new ApiError(404, 'player_not_found', 'Jogador não encontrado.');
+    const changed = player.inputEnabled !== enabled;
+    player.inputEnabled = enabled;
+    if (changed) {
+      pushEvent(state, 'session.player_control', {
+        sessionID: session.id,
+        slot,
+        enabled,
+      }, enabled ? 'info' : 'warn');
+    }
+    return { player, changed };
+  });
+  if (result.changed) {
+    bus.emit('session:player_control', { playerSlot: slot, enabled });
+    bus.emit('state:changed');
+  }
+  return { playerSlot: slot, enabled };
 }
 
 /** Remove um jogador sem encerrar os demais na mesma sessão multiplayer. */

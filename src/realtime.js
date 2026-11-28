@@ -267,6 +267,9 @@ export function attachRealtime(server) {
 
         case 'input':
           if (role !== 'viewer' || !inputAllowed(client)) return;
+          if (store.data.session?.players?.find(
+            (player) => player.slot === client.meta.playerSlot,
+          )?.inputEnabled === false) return;
           if (presence.bridge) {
             send(presence.bridge, {
               type: 'input',
@@ -503,6 +506,15 @@ export function attachRealtime(server) {
     relayToViewer({ type: 'session:warning', minutes, remainingMs: left });
     relayToHost({ type: 'session:warning', minutes, remainingMs: left });
     broadcastToAdmins({ type: 'session:warning', minutes, remainingMs: left });
+  });
+
+  bus.on('session:player_control', ({ playerSlot, enabled }) => {
+    relayToPlayer(playerSlot, { type: 'player:control', enabled });
+    if (presence.bridge) {
+      send(presence.bridge, { type: 'player:control', playerSlot, enabled });
+    }
+    broadcastToAdmins({ type: 'player:control', playerSlot, enabled });
+    broadcastState(true);
   });
 
   bus.on('session:ended', ({ session, reason }) => {

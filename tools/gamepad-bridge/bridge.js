@@ -213,6 +213,7 @@ export function createBridge({
 
   let sessionActive = false;
   const appliedBySlot = new Map([[1, neutralState()]]);
+  const inputEnabledBySlot = new Map();
   const lastInputBySlot = new Map();
   const stats = { inputs: 0, applied: 0, ignored: 0, releases: 0, localInputs: 0, wsInputs: 0 };
 
@@ -252,6 +253,10 @@ export function createBridge({
   }
 
   function updateSession(state) {
+    for (const player of state?.session?.players ?? []) {
+      inputEnabledBySlot.set(player.slot, player.inputEnabled !== false);
+      if (player.inputEnabled === false) releaseSlot(player.slot, 'controle bloqueado pelo admin');
+    }
     const active = state?.session?.status === 'active';
     if (active !== sessionActive) {
       sessionActive = active;
@@ -270,7 +275,8 @@ export function createBridge({
     if (source === 'local') stats.localInputs++;
     else stats.wsInputs++;
     lastSource = source;
-    if (!sessionActive) {
+    const slot = Math.max(1, Math.min(2, Number(payload?.playerSlot ?? 1)));
+    if (!sessionActive || inputEnabledBySlot.get(slot) === false) {
       stats.ignored++;
       return;
     }
@@ -279,7 +285,6 @@ export function createBridge({
       stats.ignored++;
       return;
     }
-    const slot = Math.max(1, Math.min(2, Number(payload?.playerSlot ?? 1)));
     lastInputBySlot.set(slot, Date.now());
     const tagged = { ...mapped, playerSlot: slot };
     if (!sameState(tagged, appliedBySlot.get(slot))) safeApply(tagged);
@@ -304,6 +309,13 @@ export function createBridge({
       case 'state':
         updateSession(msg.state);
         break;
+      case 'player:control': {
+        const slot = Math.max(1, Math.min(2, Number(msg.playerSlot ?? 1)));
+        const enabled = msg.enabled === true;
+        inputEnabledBySlot.set(slot, enabled);
+        if (!enabled) releaseSlot(slot, 'controle bloqueado pelo admin');
+        break;
+      }
       case 'input':
         handleInput(msg.payload, 'ws');
         break;

@@ -225,12 +225,18 @@ export function adminLive(t = now()) {
   };
 }
 
-export function pickViewer(pub, minutesInput) {
+export function pickViewer(pub, minutesInput, playerCountInput = 1) {
   const settings = liveSettings();
   if (!settings.enabled) throw conflict('A live está desativada.', 'live_disabled');
   const minutes = Math.trunc(Number(minutesInput));
   if (!Number.isFinite(minutes) || minutes < 1 || minutes > config.maxGuestMinutes) {
     throw bad(`Escolha de 1 a ${config.maxGuestMinutes} minutos.`, 'invalid_minutes');
+  }
+  const playerCount = Math.trunc(Number(playerCountInput));
+  if (!Number.isFinite(playerCount) || playerCount < 1
+    || playerCount > config.maxRemotePlayers
+    || (playerCount > 1 && !config.multiplayer)) {
+    throw bad('Escolha 1 jogador ou habilite o modo de 2 jogadores.', 'invalid_player_count');
   }
   prune();
   const viewer = [...lobby.values()].find((v) => v.pub === String(pub ?? ''));
@@ -249,9 +255,14 @@ export function pickViewer(pub, minutesInput) {
       playerSlot: result.player.slot,
     };
   }
-  const session = startGuestSession({ nick: viewer.nick, minutes, viewerId: viewer.id });
+  const session = startGuestSession({
+    nick: viewer.nick,
+    minutes,
+    viewerId: viewer.id,
+    playerCount,
+  });
   if (!session) throw conflict('O Xbox ficou ocupado.', 'slot_busy');
-  return { nick: viewer.nick, minutes, playerSlot: 1 };
+  return { nick: viewer.nick, minutes, playerSlot: 1, playerCount };
 }
 
 export function kickViewer(pub) {

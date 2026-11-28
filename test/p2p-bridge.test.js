@@ -18,6 +18,7 @@ const HOST_KEY = 'chave-p2p-e2e';
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const sockets = [];
 let child;
+let activeBridge = null;
 
 async function until(predicate, timeout = 4000, step = 20) {
   const start = Date.now();
@@ -115,6 +116,8 @@ test.before(async () => {
       BASE_URL: BASE,
       DATA_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'playlive-p2p-')),
       REQUIRE_ONLINE: '0',
+      MULTIPLAYER: '1',
+      MAX_REMOTE_PLAYERS: '2',
       ADMIN_PASSWORD: 'senha-p2p',
       HOST_KEY,
       DEBUG: '0',
@@ -130,8 +133,9 @@ test.before(async () => {
   throw new Error('servidor não subiu');
 });
 
-test.after(() => {
+test.after(async () => {
   for (const ws of sockets) try { ws.close(); } catch { /* ignore */ }
+  await activeBridge?.stop();
   child?.kill();
 });
 
@@ -156,19 +160,27 @@ test('canal local: só aceita o site certo, a chave certa e respeita a sessão d
   }).then((r) => r.json());
   await admin({ action: 'live_set', url: 'dQw4w9WgXcQ', enabled: true });
   const joined = await api('/api/live/join', { method: 'POST', body: { nick: 'P2P' } });
+  const joined2 = await api('/api/live/join', { method: 'POST', body: { nick: 'P2P 2' } });
   const overview = await fetch(`${BASE}/api/admin/overview`, { headers: { Cookie: cookie } }).then((r) => r.json());
-  await admin({ action: 'live_pick', pub: overview.live.viewers[0].pub, minutes: 5 });
+  await admin({ action: 'live_pick', pub: overview.live.viewers[0].pub, minutes: 5, playerCount: 2 });
+  await admin({ action: 'live_pick', pub: overview.live.viewers[1].pub, minutes: 5 });
   const me = await api(`/api/live/me?v=${joined.data.viewerId}`);
   const token = new URL(me.data.playUrl, BASE).searchParams.get('s');
+  const me2 = await api(`/api/live/me?v=${joined2.data.viewerId}`);
+  const token2 = new URL(me2.data.playUrl, BASE).searchParams.get('s');
 
   const host = openWS(`ws://127.0.0.1:${PORT}/ws`);
   await host.opened;
   host.send({ type: 'hello', role: 'host', key: HOST_KEY });
   await host.next((m) => m.type === 'hello');
   const viewer = openWS(`ws://127.0.0.1:${PORT}/ws`);
+  const viewer2 = openWS(`ws://127.0.0.1:${PORT}/ws`);
   await viewer.opened;
+  await viewer2.opened;
   viewer.send({ type: 'hello', role: 'viewer', token });
+  viewer2.send({ type: 'hello', role: 'viewer', token: token2 });
   await viewer.next((m) => m.type === 'hello');
+  await viewer2.next((m) => m.type === 'hello');
 
   const rec = recordingSink();
   const bridge = createBridge({
@@ -179,6 +191,7 @@ test('canal local: só aceita o site certo, a chave certa e respeita a sessão d
     watchdogMs: 5000,
     localPort: 0,
   });
+  activeBridge = bridge;
   bridge.start();
   const localPort = await bridge.startLocal();
   assert.ok(localPort > 0);
@@ -215,6 +228,7 @@ test('canal local: só aceita o site certo, a chave certa e respeita a sessão d
 
   host.send({ type: 'stream:ready' });
   await viewer.next((m) => m.type === 'stream:ready');
+  await viewer2.next((m) => m.type === 'stream:ready');
   await local.next((m) => m.type === 'session' && m.active === true);
 
   // --- comandos pelo caminho P2P (host → canal local) ---
@@ -223,9 +237,33 @@ test('canal local: só aceita o site certo, a chave certa e respeita a sessão d
   assert.deepEqual(rec.last().buttons, ['A']);
   assert.equal(bridge.stats.localInputs >= 1, true);
 
+  local.send({ type: 'input', payload: { ...padPayload({ pressed: [1] }), playerSlot: 2 } });
+  await until(() => rec.last().playerSlot === 2 && rec.last().buttons.includes('B'));
+  const disable = await admin({ action: 'player_control', slot: 2, enabled: false });
+  assert.equal(disable.enabled, false);
+  await until(() => isNeutral(rec.last()) && rec.last().playerSlot === 2);
+
+  const callsWhileDisabled = rec.calls.length;
+  const ignoredBefore = bridge.stats.ignored;
+  local.send({ type: 'input', payload: { ...padPayload({ pressed: [1] }), playerSlot: 2 } });
+  await until(() => bridge.stats.ignored > ignoredBefore);
+  assert.equal(rec.calls.length, callsWhileDisabled, 'P2P do jogador bloqueado não chega ao controle virtual');
+
+  local.send({ type: 'input', payload: { ...padPayload({ pressed: [2] }), playerSlot: 1 } });
+  await until(() => rec.last().playerSlot === 1 && rec.last().buttons.includes('X'));
+  const wsInputsBefore = bridge.stats.wsInputs;
+  viewer2.send({ type: 'input', payload: padPayload({ pressed: [1] }) });
+  await sleep(100);
+  assert.equal(bridge.stats.wsInputs, wsInputsBefore, 'WebSocket do jogador bloqueado não chega à ponte');
+
+  const enable = await admin({ action: 'player_control', slot: 2, enabled: true });
+  assert.equal(enable.enabled, true);
+  local.send({ type: 'input', payload: { ...padPayload({ pressed: [1] }), playerSlot: 2 } });
+  await until(() => rec.last().playerSlot === 2 && rec.last().buttons.includes('B'));
+
   // --- reserva: o mesmo controle continua funcionando pelo WebSocket do servidor ---
   viewer.send({ type: 'input', payload: padPayload({ pressed: [1] }) });
-  await until(() => rec.last().buttons.includes('B'));
+  await until(() => rec.last().playerSlot === 1 && rec.last().buttons.includes('B'));
   assert.equal(bridge.stats.wsInputs >= 1, true);
 
   // --- sondas de latência dos dois caminhos ---
@@ -253,7 +291,12 @@ test('canal local: só aceita o site certo, a chave certa e respeita a sessão d
   await until(() => isNeutral(rec.last()), 2000);
 
   // --- encerrou a sessão: tudo bloqueado de novo ---
-  await api('/api/session/forfeit', { method: 'POST', body: { token, confirm: true } });
+  const forfeit2 = await api('/api/session/forfeit', { method: 'POST', body: { token: token2, confirm: true } });
+  assert.equal(forfeit2.status, 200);
+  assert.equal(forfeit2.data.ended, false);
+  const forfeit1 = await api('/api/session/forfeit', { method: 'POST', body: { token, confirm: true } });
+  assert.equal(forfeit1.status, 200);
+  assert.equal(forfeit1.data.ended, true);
   await local2.next((m) => m.type === 'session' && m.active === false);
   const before = rec.calls.length;
   local2.send({ type: 'input', payload: padPayload({ pressed: [0] }) });
@@ -261,6 +304,7 @@ test('canal local: só aceita o site certo, a chave certa e respeita a sessão d
   assert.equal(rec.calls.length, before);
 
   await bridge.stop();
+  activeBridge = null;
 });
 
 test('servidor limita o envio de comandos por conexão (anti-inundação)', async () => {

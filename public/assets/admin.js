@@ -164,6 +164,30 @@ function render() {
   $('sessionEnd').textContent = session?.endsAt ? fmtDateTime(session.endsAt) : '—';
   $('sessionViewer').textContent = session ? (session.viewerConnected ? 'sim' : 'não') : '—';
   $('sessionStream').textContent = session ? (session.streamReady ? 'sim' : 'não') : '—';
+  const playerCount2 = $('playerCount2');
+  const playerCount1 = $('playerCount1');
+  playerCount2.disabled = !config.multiplayer || config.maxRemotePlayers < 2 || active;
+  playerCount1.disabled = active;
+  if (active) {
+    playerCount1.checked = (session.maxPlayers ?? 1) === 1;
+    playerCount2.checked = (session.maxPlayers ?? 1) === 2;
+  } else if (playerCount2.disabled) {
+    playerCount1.checked = true;
+  }
+  $('sessionPlayers').innerHTML = session?.players?.length
+    ? session.players.map((player) => `
+        <div class="list-item">
+          <div class="main">
+            <strong>Jogador ${player.slot}: ${esc(player.name)}</strong>
+            <small>${player.viewerConnected ? 'conectado' : 'desconectado'} · controle ${player.inputEnabled ? 'ativo' : 'bloqueado'}</small>
+          </div>
+          <button class="btn ${player.inputEnabled ? 'btn-danger' : 'btn-primary'} btn-sm"
+            data-action="player_control" data-slot="${player.slot}"
+            data-enabled="${player.inputEnabled ? 'false' : 'true'}" ${active ? '' : 'disabled'}>
+            ${player.inputEnabled ? 'desconectar controle' : 'reconectar controle'}
+          </button>
+        </div>`).join('')
+    : '';
 
   const openPlay = $('btnOpenPlay');
   if (active && session.playUrl) {
@@ -235,6 +259,27 @@ const confirmations = {
 
 async function handleAction(btn) {
   const action = btn.dataset.action;
+
+  if (action === 'player_control') {
+    const enabled = btn.dataset.enabled === 'true';
+    const slot = Number(btn.dataset.slot);
+    btn.disabled = true;
+    try {
+      await api('/api/admin/action', {
+        method: 'POST',
+        body: { action, slot, enabled },
+      });
+      toast(enabled
+        ? `Controle do jogador ${slot} reconectado.`
+        : `Controle do jogador ${slot} desconectado.`, enabled ? 'green' : 'warn');
+      await load(true);
+    } catch (err) {
+      toast(err.message, 'danger');
+    } finally {
+      btn.disabled = false;
+    }
+    return;
+  }
 
   if (action === 'extend') {
     const minutes = Number(btn.dataset.minutes);
@@ -343,12 +388,15 @@ document.addEventListener('click', async (event) => {
       toast('Link removido da página principal. O YouTube continua transmitindo.', 'green');
     } else if (kind === 'pick') {
       const minutes = Number($('liveMinutes').value);
+      const playerCount = Number(document.querySelector('input[name="playerCount"]:checked')?.value ?? 1);
       const result = await api('/api/admin/action', {
         method: 'POST',
-        body: { action: 'live_pick', pub: btn.dataset.pub, minutes },
+        body: { action: 'live_pick', pub: btn.dataset.pub, minutes, playerCount },
       });
       toast(result.playerSlot > 1
         ? `${result.nick} entrou como jogador ${result.playerSlot}; a sessão termina no horário já definido.`
+        : result.playerCount > 1
+          ? `${result.nick} iniciou uma sessão para ${result.playerCount} jogadores. Escolha o segundo jogador da fila.`
         : `${result.nick} vai jogar por ${result.minutes} min.`, 'green');
     } else if (kind === 'kick') {
       await api('/api/admin/action', { method: 'POST', body: { action: 'live_kick', pub: btn.dataset.pub } });
